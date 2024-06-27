@@ -1,3 +1,7 @@
+"""This module contains code for segmentation of the original image on set of subimages. Original image and subimages are saved in 'data/' directory. Besides,
+it uses subimages to calculate BOW codebook, which is saved as JSON file in 'codebooks/' directory.
+"""
+
 import cv2
 import glob
 import json
@@ -5,8 +9,10 @@ import math
 import matplotlib.pyplot as plt
 import numpy as np
 import os
+import pickle as pkl
 from scipy.cluster.vq import kmeans, vq
 
+#region DATASET PREPARATION
 ORIGINAL_IMAGES_DIR = 'data/original_images/'
 SUBIMAGES_DIR = 'data/subimages/'
 COLORED_SATELITE_IMAGE_NAME = 'colored_satelite_image.png'
@@ -14,9 +20,6 @@ BW_SATELITE_IMAGE_NAME = 'bw_satelite_image.png'
 
 PROJECT_ROOT_DIR = 'Swarm-Localization'
 
-BOW_CODEBOOK_JSON = 'codebooks/bow_codebook.json'
-
-#region DATASET PREPARATION
 def convert_image_to_bw_and_save(original_image_path, original_image_name, path_to_save = None):
     """Convert given image in black and white and save it into desired directory.
 
@@ -40,7 +43,7 @@ def divide_image_on_subimages_and_save(image, divide_on, remove_old_files = True
     Args:
         image (numpy.ndarray): Original image as numpy array.
         divide_on (tuple[int, int]): Number of subimages in horizontal and vertical direction.
-        remove_old_files(bool, optional): If True, remove previous files in the directory. Defaults to True.
+        remove_old_files(bool, optional): If True, remove previous image files in the directory. Defaults to True.
     """
     if remove_old_files:
         remove_files_from_dir(SUBIMAGES_DIR)
@@ -131,7 +134,7 @@ def show_sift_keypoints(image, keypoints):
     plt.show()
 
 def kmeans_over_descriptors(stacked_descriptors):
-    """Kmeans clustering over list of all descriptors from dataset.
+    """Kmeans clustering over all descriptors from dataset.
 
     Args:
         all_descriptors (numpy.ndaray): Array of all descriptors.
@@ -164,6 +167,10 @@ def map_descriptors_to_centroids(descriptors, centroids):
 #endregion
 
 #region BOW
+BOW_CODEBOOK_JSON = 'codebooks/bow_codebook.json'
+VISUAL_WORDS_IN_IMAGES_PKL = 'codebooks/visual_words_in_images.pkl'
+VISUAL_WORDS_HISTOGRAMS_NPY = 'codebooks/visual_words_histograms.npy'
+
 def calculate_visual_words_histograms(visual_words):
     """Calculate how many times each centroid (visual word) appears in each image.
 
@@ -227,7 +234,11 @@ def prepare_and_save_bow_codebook(subimages):
 
     tf_idf = tfidf(visual_words_histograms)
 
-    save_bow_codebook(tf_idf, subimages) 
+    save_bow_codebook(tf_idf, subimages)
+
+    with open(VISUAL_WORDS_IN_IMAGES_PKL, 'wb') as file:
+        pkl.dump(visual_words_in_images, file)
+    np.save(VISUAL_WORDS_HISTOGRAMS_NPY, visual_words_histograms)  
 #endregion
 
 #region IMAGE COMPARISON
@@ -250,13 +261,9 @@ def calculate_cosine_similarity(first_vector, second_vector):
 
 if __name__ == '__main__':
     if is_correct_dir():
-        with open(BOW_CODEBOOK_JSON) as codebook_file:
-            bow_codebook = json.load(codebook_file)
-        
-        image_to_compare = "3_1.png"
+        visual_words_in_images = np.load(VISUAL_WORDS_IN_IMAGES_PKL, allow_pickle = True)
 
-        for image_name in bow_codebook.keys():
-            print(image_name, calculate_cosine_similarity(bow_codebook[image_to_compare], bow_codebook[image_name]))
+        print(len(visual_words_in_images[0]), len(set(visual_words_in_images[0])))
 
     else:
         print(f"Call script from project's root directory: {PROJECT_ROOT_DIR}")
