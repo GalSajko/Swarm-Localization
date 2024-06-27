@@ -263,6 +263,8 @@ if __name__ == '__main__':
     if is_correct_dir():
         visual_words_in_images = np.load(VISUAL_WORDS_IN_IMAGES_PKL, allow_pickle = True)
 
+        subimages = get_dict_of_dataset_images(SUBIMAGES_DIR)
+
         print(len(visual_words_in_images[0]), len(set(visual_words_in_images[0])))
 
     else:
