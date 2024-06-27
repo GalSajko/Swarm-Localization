@@ -259,5 +259,5 @@ if __name__ == '__main__':
             print(image_name, calculate_cosine_similarity(bow_codebook[image_to_compare], bow_codebook[image_name]))
 
     else:
-        print("Call script from project's root directory")
+        print(f"Call script from project's root directory: {PROJECT_ROOT_DIR}")
     
