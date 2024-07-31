@@ -75,6 +75,10 @@ def get_dict_of_dataset_images(dir):
             image = cv2.imread(dir + filename)
             filenames_and_images[filename] = image
 
+    keys = list(filenames_and_images.keys())
+    keys.sort()
+    filenames_and_images = {i: filenames_and_images[i] for i in keys}
+
     return filenames_and_images
 
 def remove_files_from_dir(dir):
@@ -100,7 +104,7 @@ def is_correct_dir():
 # endregion
 
 #region SIFT 
-NUMBER_OF_CLUSTERS = 1000
+NUMBER_OF_CLUSTERS = 2000
 
 def sift_visual_features(list_of_images):
     """Compute keypoints and descriptors with SIFT algorithm.
@@ -168,8 +172,10 @@ def map_descriptors_to_centroids(descriptors, centroids):
 
 #region BOW
 BOW_CODEBOOK_JSON = 'codebooks/bow_codebook.json'
+VISUAL_WORDS_NPY = 'codebooks/visual_words.npy'
 VISUAL_WORDS_IN_IMAGES_PKL = 'codebooks/visual_words_in_images.pkl'
 VISUAL_WORDS_HISTOGRAMS_NPY = 'codebooks/visual_words_histograms.npy'
+VISUAL_WORDS_WEIGHTS_NPY = 'codebooks/visual_words_weights.npy'
 
 def calculate_visual_words_histograms(visual_words):
     """Calculate how many times each centroid (visual word) appears in each image.
@@ -189,21 +195,21 @@ def calculate_visual_words_histograms(visual_words):
     
     return(np.stack(frequency_vectors))
 
-def tfidf(visual_words_histograms):
+def idf(visual_words_histograms):
     """Calculate the importance of visual words using TFIDF algorithm.
 
     Args:
         visual_words_histograms (numpy.ndarray): Histograms of visual words for each image.
 
     Returns:
-        numpy.ndarray: Weighted histograms for each image.
+        numpy.ndarray: Weights of the centroids.
     """
     number_of_images = len(visual_words_histograms)
     # Number of images that contain visual words.
     tf = np.sum(visual_words_histograms > 0, axis = 0)
     idf = np.log(number_of_images / tf)
 
-    return visual_words_histograms * idf
+    return idf
 
 def save_bow_codebook(tf_idfs, subimages_dict):
     """Save BOW tfidf codebook to JSON file.
@@ -231,41 +237,23 @@ def prepare_and_save_bow_codebook(subimages):
     visual_words_in_images = map_descriptors_to_centroids(descriptors, visual_words)
 
     visual_words_histograms = calculate_visual_words_histograms(visual_words_in_images)
+    weights = idf(visual_words_histograms)
 
-    tf_idf = tfidf(visual_words_histograms)
+    tf_idf = visual_words_histograms * weights
 
     save_bow_codebook(tf_idf, subimages)
 
+    np.save(VISUAL_WORDS_WEIGHTS_NPY, weights)
+    np.save(VISUAL_WORDS_NPY, visual_words)
+    np.save(VISUAL_WORDS_HISTOGRAMS_NPY, visual_words_histograms)  
     with open(VISUAL_WORDS_IN_IMAGES_PKL, 'wb') as file:
         pkl.dump(visual_words_in_images, file)
-    np.save(VISUAL_WORDS_HISTOGRAMS_NPY, visual_words_histograms)  
-#endregion
-
-#region IMAGE COMPARISON
-def calculate_cosine_similarity(first_vector, second_vector):
-    """Calculate cosine similarity between two vectors.
-
-    Args:
-        first_vector (numpy.ndarray): First vector.
-        second_vector (numpy.ndarray): Second vector.
-
-    Returns:
-        float: Cosine similarity between first and second vector.
-    """
-    dot_product = np.dot(first_vector, second_vector)
-    product_of_norms = np.linalg.norm(first_vector) * np.linalg.norm(second_vector)
-
-    return dot_product / product_of_norms
-
 #endregion
 
 if __name__ == '__main__':
     if is_correct_dir():
-        visual_words_in_images = np.load(VISUAL_WORDS_IN_IMAGES_PKL, allow_pickle = True)
-
         subimages = get_dict_of_dataset_images(SUBIMAGES_DIR)
-
-        print(len(visual_words_in_images[0]), len(set(visual_words_in_images[0])))
+        prepare_and_save_bow_codebook(subimages)
 
     else:
         print(f"Call script from project's root directory: {PROJECT_ROOT_DIR}")
