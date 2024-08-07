@@ -1,19 +1,6 @@
 import numpy as np
 import time
 
-AGENT_COLOR_OPINION_DICT = {
-    '1_1.png' : (255, 51, 0),
-    '1_2.png' : (255, 191, 0),
-    '2_1.png' : (128, 255, 0),
-    '2_2.png' : (0, 255, 255),
-    '3_1.png' : (0, 64, 255),
-    '3_2.png' : (128, 0, 255),
-    '4_1.png' : (191, 0, 255),
-    '4_2.png' : (255, 0, 255),
-    '5_1.png' : (255, 128, 0),
-    '5_2.png' : (255, 0, 128)
-}
-
 def set_timer(low, max):
     """Set random timer for uniformly distributed values.
 
@@ -41,5 +28,21 @@ def calculate_cosine_similarity(first_vector, second_vector):
     """
     dot_product = np.dot(first_vector, second_vector)
     product_of_norms = np.linalg.norm(first_vector) * np.linalg.norm(second_vector)
+    
+    if product_of_norms.any():
+        return dot_product / product_of_norms
 
-    return dot_product / product_of_norms
+    return 0
+
+def sleep_with_adjustable_period(loop_period, start_time):
+    """Sleep for the remaining time, ensuring that the whole loop lasts for desired period.
+
+    Args:
+        max_period (float): Desired loop period.
+        start_time (float): Time at which the loop begun.
+    """
+    if sleep_time := loop_period - (time.time() - start_time) >= 0:
+        time.sleep(sleep_time)
+        return
+    
+    time.sleep(0)

@@ -37,22 +37,19 @@ def calculate_initial_positions(image):
     
     return np.asarray(positions)
 
-def visualize_agent(position, image, id, color):
+def visualize_agent(position, image, color):
     """Visualize agent on the image.
 
     Args:
         position (numpy.ndarray): Agent's position.
         image (numpy.ndarray): Copy of the original image.
+        color (tuple): RGB color, representing agent's current opinion.
     """
     start_point = np.array(position - constants.AGENT_SIZE / 2).astype(np.int32)
     end_point = np.array(position + constants.AGENT_SIZE / 2).astype(np.int32)
 
-    # if id == '0':
-    #     color = (255, 0, 0)
-    # else:
-    #     color = (0, 0, 255)
-
-    cv2.rectangle(image, start_point, end_point, color, 5)    
+    cv2.rectangle(image, start_point, end_point, color, 5)
+    cv2.circle(image, position.astype(np.int32), constants.COMMUNICATION_RANGE, (255, 255, 0), 2)
 
 def image_recognition_test_with_masked_image(original_image, sift, centroids, weights, codebook):
     masked_image = np.copy(original_image)
@@ -115,8 +112,6 @@ if __name__ == "__main__":
     # cv2.waitKey( )
 
     centroids = np.load('codebooks/visual_words.npy')
-    visual_words_in_images = np.load('codebooks/visual_words_in_images.pkl', allow_pickle = True)
-    visual_words_histograms = np.load('codebooks/visual_words_histograms.npy')
     weights = np.load('codebooks/visual_words_weights.npy')
     with open('codebooks/bow_codebook.json', 'r') as file:
         codebook = json.load(file)
@@ -127,15 +122,11 @@ if __name__ == "__main__":
     while True:
         image_copy = np.copy(original_image_with_keypoints)
 
-        cosine_similarities = []
+        public_opinions_threads = []
         for agent in agents:
-            visualize_agent(agent.get_position(), image_copy, agent.id, agent.get_color())
-            cosine_similarities.append(agent.get_cosine_similarities())
-
-        if not None in cosine_similarities:
-            average_cosine_similarities = np.mean(np.array(cosine_similarities), axis = 0)
-            closest_image = list(codebook.keys())[np.argmax(average_cosine_similarities)]
-            print(f"Closest image: {closest_image}, cosine similarities: {average_cosine_similarities}")
+            visualize_agent(agent.get_position(), image_copy, agent.get_color())
+            if agent.get_state() == constants.RECEIVING_STATE:
+                agent.collect_social_information(agents)
      
         cv2.imshow("img", image_copy)
-        cv2.waitKey(1)    
+        cv2.waitKey(1)
