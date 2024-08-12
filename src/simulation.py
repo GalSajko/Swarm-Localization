@@ -1,6 +1,9 @@
 import json
+import time
 import constants
 import cv2
+from drawnow import drawnow
+import matplotlib.pyplot as plt
 import numpy as np
 import sys
 
@@ -51,48 +54,19 @@ def visualize_agent(position, image, color):
     cv2.rectangle(image, start_point, end_point, color, 5)
     cv2.circle(image, position.astype(np.int32), constants.COMMUNICATION_RANGE, (255, 255, 0), 2)
 
-def image_recognition_test_with_masked_image(original_image, sift, centroids, weights, codebook):
-    masked_image = np.copy(original_image)
+def check_for_consenus(opinions, agents):
+    """Check if agents have reached a consensus.
 
-    number_of_boxes_x = int(masked_image.shape[1] / constants.AGENT_SIZE[0])
-    boxes_coordinates_x = np.linspace(int(constants.AGENT_SIZE[0] / 2), masked_image.shape[1] - int(constants.AGENT_SIZE[0]), number_of_boxes_x)
-    number_of_boxes_y = int(masked_image.shape[0] / constants.AGENT_SIZE[1])
-    boxes_coordinates_y = np.linspace(int(constants.AGENT_SIZE[1] / 2), masked_image.shape[0] - int(constants.AGENT_SIZE[1]), number_of_boxes_y)
+    Args:
+        opinions (list): List of all agents opinions.
+        agents (list): List of all agents.
 
-    desired_covered_percentage = 0.2
-    needed_number_of_boxes = int(np.prod(masked_image.shape[:2]) * desired_covered_percentage / np.prod(constants.AGENT_SIZE))
-
-    centers_of_boxes = [[np.random.choice(boxes_coordinates_x), np.random.choice(boxes_coordinates_y)] for _ in range(needed_number_of_boxes)]
-    
-    for center in centers_of_boxes:
-        masked_image[
-            int(center[1]) - int(constants.AGENT_SIZE[0] / 2) : int(center[1]) + int(constants.AGENT_SIZE[0] / 2),
-            int(center[0]) - int(constants.AGENT_SIZE[1] / 2) : int(center[0]) + int(constants.AGENT_SIZE[1] / 2)
-            ] = 0
-    
-    masked_keypoints, masked_descriptors = sift.detectAndCompute(masked_image, None)
-    masked_image_with_keypoints = cv2.drawKeypoints(masked_image, masked_keypoints, 0, (0, 255, 0), flags = cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
-
-    masked_histogram = np.zeros(len(centroids))
-    masked_centroids_indexes, _ = vq(masked_descriptors, centroids)
-    for index in masked_centroids_indexes:
-        masked_histogram[index] += 1
-    
- 
-    important_weights_indices = np.where(weights >= 2.5 * np.mean(weights))[0].astype(np.int16)
-
-    weighted_masked_histogram = masked_histogram[important_weights_indices] * weights[important_weights_indices]
-
-    cosine_similarities = []
-
-    for weighted_histogram in codebook.values():
-        cosine_similarities.append(np.round(utils.calculate_cosine_similarity(weighted_masked_histogram, np.array(weighted_histogram)[important_weights_indices]), 4))
-    closest_image = list(codebook.keys())[np.argmax(cosine_similarities)]
-
-    print(f"Closest image: {closest_image}, cosine similarity: {max(cosine_similarities)}")
-    print(f"All cosine similarities: {cosine_similarities}")
-
-    return masked_image_with_keypoints
+    Returns:
+        bool: True if consensus has been reached, False otherwise.
+    """
+    if len(opinions) != len(agents) or opinions[0] is None:
+        return False
+    return opinions.count(opinions[0]) == len(opinions)
 
 if __name__ == "__main__":
     image_name = sys.argv[1]
@@ -102,15 +76,6 @@ if __name__ == "__main__":
     keypoints, _ = sift.detectAndCompute(original_image, None)
     original_image_with_keypoints = cv2.drawKeypoints(original_image, keypoints, 0, (0, 255, 0), flags = cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
 
-    # photo_segment = original_image[500 : 700, 500 : 700]
-    # augmented_photo_segment = ia.add_gaussian_noise(photo_segment)
-    # # augmented_photo_segment = ia.pixelate_image(photo_segment, (20, 20))
-    # print(augmented_photo_segment)
-
-    # cv2.imshow("original photo segment", photo_segment)
-    # cv2.imshow("augmented photo segment", augmented_photo_segment)
-    # cv2.waitKey( )
-
     centroids = np.load('codebooks/visual_words.npy')
     weights = np.load('codebooks/visual_words_weights.npy')
     with open('codebooks/bow_codebook.json', 'r') as file:
@@ -119,14 +84,27 @@ if __name__ == "__main__":
     positions = calculate_initial_positions(original_image_with_keypoints)
     agents = [Agent(original_image, centroids, weights, codebook, positions[i], str(i)) for i in range(len(positions))]
 
+    start_time = time.time()
+    elapsed_time = 0
     while True:
         image_copy = np.copy(original_image_with_keypoints)
 
-        public_opinions_threads = []
+        opinions = []
         for agent in agents:
             visualize_agent(agent.get_position(), image_copy, agent.get_color())
             if agent.get_state() == constants.RECEIVING_STATE:
                 agent.collect_social_information(agents)
-     
-        cv2.imshow("img", image_copy)
+            
+            opinions.append(agent.opinion)
+        
+        if check_for_consenus(opinions, agents):
+            print(f"CONSENSUS REACHED IN {elapsed_time}")
+            break
+
+        cv2.imshow(f"{image_name}", image_copy)
         cv2.waitKey(1)
+
+        elapsed_time = time.time() - start_time
+    
+    for agent in agents:
+        utils.draw_opinions(agent.all_collected_opinions)

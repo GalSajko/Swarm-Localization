@@ -34,6 +34,8 @@ class Agent:
         # Opinion is defined as name of the subimage.
         self.opinion = None
         self.opinion_locker = threading.Lock()
+        self.all_collected_opinions = []
+        self.collected_opinions = np.zeros(len(codebook))
 
         self.color = None
         self.color_locker = threading.Lock()
@@ -285,24 +287,38 @@ class Agent:
         """
         private_information = self.get_private_information()
         social_information = list(self.social_information_dict.values())
-
-        if not len(social_information) and len(private_information):
-            total_information = private_information
-        elif not len(private_information) and len(social_information):
-            total_information = np.mean(social_information, axis = 0)
-        elif not len(social_information) and not len(private_information):
-            total_information = []
-        else:
-            # total_information = np.mean(np.vstack([social_information, private_information]), axis = 0)
-            average_social_information = np.mean(social_information, axis = 0)
-            total_information = private_information + average_social_information
         
+        if not len(social_information) and not len(private_information):
+            return
+        
+        if len(social_information):
+            if len(private_information):
+                total_information = np.vstack((private_information, social_information))
+            else:
+                total_information = social_information
+
+            for information in total_information:
+                max_index = np.argmax(information)
+                max_value = information[max_index]
+                self.collected_opinions[max_index] += max_value
+
+            new_private_information = np.mean(total_information, axis = 0)
+        else:
+            if len(private_information):
+                max_index = np.argmax(private_information)
+                max_value = private_information[max_index]
+                self.collected_opinions[max_index] += max_value
+
+                new_private_information = private_information          
+
+        self.all_collected_opinions.append(np.copy(self.collected_opinions))
+
         try:
-            opinion = list(self.codebook.keys())[np.argmax(total_information)]
+            opinion = list(self.codebook.keys())[np.argmax(self.collected_opinions)]
         except ValueError:
             opinion = None
 
-        self.set_private_information(total_information)
+        self.set_private_information(new_private_information)
         self.set_opinion(opinion)
 
         print(f"Agent: {self.id}, opinion: {opinion}")
@@ -311,14 +327,14 @@ class Agent:
             self.set_color(constants.AGENT_COLOR_OPINION_DICT[opinion])
     
     def get_dissemination_time(self):
-        """Calculate dissemination time, based on current values of private information.
+        """Calculate dissemination time, based on current opinion.
 
         Returns:
             float: Dissemination time in seconds.
         """
-        private_information = self.get_private_information()
+        dissemination_time = constants.MAX_DISSEMINATION_TIME * max(self.collected_opinions) * 10
+        if dissemination_time > constants.MAX_DISSEMINATION_TIME:
+            dissemination_time = constants.MAX_DISSEMINATION_TIME
 
-        if len(private_information):
-            return constants.MAX_DISSEMINATION_TIME * max(private_information) * 2
-        return 0
+        return dissemination_time
         

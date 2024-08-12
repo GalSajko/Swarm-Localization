@@ -1,3 +1,5 @@
+import matplotlib.pyplot as plt
+import matplotlib.pyplot
 import numpy as np
 import time
 
@@ -46,3 +48,16 @@ def sleep_with_adjustable_period(loop_period, start_time):
         return
     
     time.sleep(0)
+
+def draw_opinions(all_collected_opinions):
+    """Draw the course of collected opinions through the localization process.
+
+    Args:
+        all_collected_opinions (list): List of combined collected opinions.
+    """
+    all_collected_opinions = np.array(all_collected_opinions)
+    plt.figure()
+    time_steps = range(0, len(all_collected_opinions))
+    for i in range(len(all_collected_opinions[0])):
+        plt.plot(time_steps, all_collected_opinions[:, i])
+    plt.show()
