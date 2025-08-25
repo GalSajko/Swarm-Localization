@@ -104,7 +104,7 @@ def is_correct_dir():
 # endregion
 
 #region SIFT 
-NUMBER_OF_CLUSTERS = 2000
+NUMBER_OF_CLUSTERS = 64
 
 def sift_visual_features(list_of_images):
     """Compute keypoints and descriptors with SIFT algorithm.
@@ -170,12 +170,14 @@ def map_descriptors_to_centroids(descriptors, centroids):
     return visual_words
 #endregion
 
-#region BOW
+#region BOW AND VLAD
 BOW_CODEBOOK_JSON = 'codebooks/bow_codebook.json'
 VISUAL_WORDS_NPY = 'codebooks/visual_words.npy'
 VISUAL_WORDS_IN_IMAGES_PKL = 'codebooks/visual_words_in_images.pkl'
 VISUAL_WORDS_HISTOGRAMS_NPY = 'codebooks/visual_words_histograms.npy'
 VISUAL_WORDS_WEIGHTS_NPY = 'codebooks/visual_words_weights.npy'
+VLAD_CENTROIDS_NPY = 'codebooks/vlad_centroids.npy'
+VLAD_VECTORS_NPY = 'codebooks/vlad_vectors.npy'
 
 def calculate_visual_words_histograms(visual_words):
     """Calculate how many times each centroid (visual word) appears in each image.
@@ -211,6 +213,31 @@ def idf(visual_words_histograms):
 
     return idf
 
+def calculate_vlad_vectors(descriptors, mapped_descriptors, centroids):
+    """Calculate vlad descriptors for all images.
+
+    Args:
+        descriptors (numpy.ndarray): SIFT descriptors.
+        mapped_descriptors (numpy.ndarray): SIFT descriptors mapped to centroids.
+        centroids (numpy.ndarray): Centroids.
+
+    Returns:
+        numpy.ndarray: Vlad descriptors of all images.
+    """
+    vlad_vectors = np.zeros((len(descriptors), len(centroids), len(descriptors[0][0])))
+    for image_index, descriptors_in_image in enumerate(descriptors):
+        for descriptor_index, descriptor in enumerate(descriptors_in_image):
+            centroid_index = mapped_descriptors[image_index][descriptor_index]
+            difference = np.round(descriptor - centroids[centroid_index], 4)
+            vlad_vectors[image_index][centroid_index] += difference
+        print(vlad_vectors[image_index][0])
+
+    return vlad_vectors
+
+
+#endregion
+
+#region PREPARE AND SAVE
 def save_bow_codebook(tf_idfs, subimages_dict):
     """Save BOW tfidf codebook to JSON file.
 
@@ -248,12 +275,29 @@ def prepare_and_save_bow_codebook(subimages):
     np.save(VISUAL_WORDS_HISTOGRAMS_NPY, visual_words_histograms)  
     with open(VISUAL_WORDS_IN_IMAGES_PKL, 'wb') as file:
         pkl.dump(visual_words_in_images, file)
+
+def prepare_and_save_vlad_codebook(subimages):
+    """Prepare and save VLAD descriptors of database images.
+
+    Args:
+        subimages (numpy.ndarray): Subimages.
+    """
+    keypoints, descriptors = sift_visual_features(list(subimages.values()))
+    centroids = kmeans_over_descriptors(np.vstack(descriptors))
+    mapped_descriptors = map_descriptors_to_centroids(descriptors, centroids)
+    vlad_vectors = calculate_vlad_vectors(descriptors, mapped_descriptors, centroids)
+
+    np.save(VLAD_CENTROIDS_NPY, centroids)
+    np.save(VLAD_VECTORS_NPY, vlad_vectors)
 #endregion
 
 if __name__ == '__main__':
     if is_correct_dir():
+        # divide_image_on_subimages_and_save(cv2.imread(ORIGINAL_IMAGES_DIR + BW_SATELITE_IMAGE_NAME), (5, 3), True)
         subimages = get_dict_of_dataset_images(SUBIMAGES_DIR)
-        prepare_and_save_bow_codebook(subimages)
+        
+        # prepare_and_save_bow_codebook(subimages)
+        prepare_and_save_vlad_codebook(subimages)
 
     else:
         print(f"Call script from project's root directory: {PROJECT_ROOT_DIR}")

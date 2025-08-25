@@ -1,5 +1,6 @@
 import cv2
 import numpy as np
+import random
 from scipy.cluster.vq import vq
 import threading
 import time
@@ -9,8 +10,12 @@ import image_augmentation as ia
 import utils
 
 class Agent:
-    def __init__(self, original_image, centroids, weights, codebook, start_position, id):
+    def __init__(self, original_image, algorithm, centroids, codebook, start_position, id, is_forgetting, weights = None):
         self.id = id 
+
+        self.do_stop = False
+
+        self.algorithm = algorithm
 
         self.position_locker = threading.Lock()
         self.position = start_position
@@ -18,7 +23,6 @@ class Agent:
         self.centroids = centroids
         self.weights = weights
         self.histogram = np.zeros(len(self.centroids))
-        self.weighted_histogram = np.zeros_like(self.histogram)
         self.codebook = codebook
 
         self.sift_extractor = cv2.SIFT_create()
@@ -26,16 +30,22 @@ class Agent:
 
         self.state = constants.EXPLORATION_STATE
         self.state_locker = threading.Lock()
+        self.exploration_state_counter = 0
 
         # private information is defined as vector of cosine similarities to all base images.
         self.private_information = []
         self.private_information_locker = threading.Lock()
         self.social_information_dict = {}
+
         # Opinion is defined as name of the subimage.
         self.opinion = None
         self.opinion_locker = threading.Lock()
-        self.all_collected_opinions = []
-        self.collected_opinions = np.zeros(len(codebook))
+        self.aggregated_decision_vectors = []
+        self.decision_vector = np.zeros(len(codebook))
+        self.forgetting_factors = np.zeros_like(self.decision_vector)
+        self.is_forgetting = is_forgetting
+
+        self.vlad_vectors = np.zeros((len(self.centroids), len(self.centroids[0])))
 
         self.color = None
         self.color_locker = threading.Lock()
@@ -170,6 +180,9 @@ class Agent:
                 
                 self.set_position(current_position + velocity)
 
+                if self.do_stop:
+                    return 
+                
                 time.sleep(0.01)
 
         move_thread = threading.Thread(target = move, name = 'move_thread_' + self.id, daemon = True)
@@ -203,55 +216,104 @@ class Agent:
                     int(current_position[0] - constants.AGENT_SIZE[1] / 2) : int(current_position[0] + constants.AGENT_SIZE[1] / 2)
                     ]
                 
-                photo = ia.pixelate_image(photo, (20, 20))
-                photo = ia.add_gaussian_noise(photo)
-
-                self.get_cosine_similarities_to_base_images(photo)
+                try:
+                    photo = ia.pixelate_image(photo, (15, 15))
+                    photo = ia.add_gaussian_noise(photo)
+                except Exception:
+                    pass
+                
+                if self.algorithm == constants.BOW_ALGORITHM:
+                    weighted_histogram = self.calculate_weighted_histogram(photo)
+                    if weighted_histogram.any():
+                        distance_vector = self.evaluate_similarity(weighted_histogram)
+                        self.set_private_information(distance_vector)
+                elif self.algorithm == constants.VLAD_ALGORITHM:
+                    self.update_vlad_vector(photo)
                 
                 exploration_elapsed_time = time.time() - exploration_start_time
                 utils.sleep_with_adjustable_period(loop_period, loop_start_time)
+
+                if self.do_stop:
+                    return
         
         exploration_thread = threading.Thread(target = exploration, name = 'photo_thread_' + self.id, args = (exploration_time, ), daemon = True)
         exploration_thread.start()
         
         return exploration_thread
-
-    def get_cosine_similarities_to_base_images(self, photo):
-        """Calculate cosine similarities between taken photo and all of the baseline photos.
+    
+    def calculate_weighted_histogram(self, photo):
+        """Calculate weighted histogram based on BOW algorithm.
 
         Args:
             photo (numpy.ndarray): Photo taken by the agent.
+
+        Returns:
+            numpy.ndarray: Weighted histogram.
         """
         _, descriptors = self.sift_extractor.detectAndCompute(photo.astype(np.uint8), None)
-        if descriptors is not None:
-            centroids_indexes_of_descriptors, _ = vq(descriptors, self.centroids)
-            for centroid_index in centroids_indexes_of_descriptors:
-                self.histogram[centroid_index] += 1
 
-            if self.histogram.any():
-                self.weighted_histogram = self.histogram * self.weights
+        if descriptors is None:
+            return np.zeros(len(self.centroids))
 
-                cosine_similarities = []
-                for codebook_vector in self.codebook.values():
-                    cosine_similarities.append(np.round(utils.calculate_cosine_similarity(self.weighted_histogram, codebook_vector), 4))
+        centroids_indexes_of_descriptors, _ = vq(descriptors, self.centroids)
+        for centroid_index in centroids_indexes_of_descriptors:
+            self.histogram[centroid_index] += 1
+ 
+        if self.histogram.any():
+            return self.histogram * self.weights
+        
+        return np.zeros(len(self.centroids))
 
-                self.set_private_information(cosine_similarities)
+    def update_vlad_vector(self, photo):
+        _, descriptors = self.sift_extractor.detectAndCompute(photo.astype(np.uint8), None)
+        if descriptors is None:
+            return np.zeros(len(self.centroids))
+        mapped_descriptors, _ = vq(descriptors, self.centroids)
+
+        for descriptor_index, descriptor in enumerate(descriptors):
+            centroid_index = mapped_descriptors[descriptor_index]
+            difference = np.round(descriptor - self.centroids[centroid_index], 4)
+            self.vlad_vectors[centroid_index] += difference
+
     
+    def evaluate_similarity(self, weighted_histogram):
+        """Calculate similarity between weighted histogram vector and codebook vector for each image.
+
+        Args:
+            weighted_histogram (numpy.ndarray): Weighted histogram vector.
+
+        Returns:
+            numpy.ndarray: Vector of similarities between weighted histogram and each image.
+        """
+        similarity_vector = []
+        for codebook_vector in self.codebook.values():
+            similarity_vector.append(np.round(utils.calculate_cosine_similarity(weighted_histogram, codebook_vector), 3))
+        return np.array(similarity_vector)
+            
     def start_decision_making_thread(self):
         """Thread for updating agent's opinion, based on private and social information.
         """
         def decision_making_in_loop():
             while True:
                 # Explore the environment and calculate personal information
-                _, exploration_time = utils.set_timer(7.0, 15.0)
+                _, exploration_time = utils.set_timer(7.0, 15.0 - self.exploration_state_counter)
                 exploration_thread = self.start_exploration_thread(exploration_time)
                 exploration_thread.join()
+                self.exploration_state_counter = self.exploration_state_counter + 1 if self.exploration_state_counter < 7 else self.exploration_state_counter
+                if self.do_stop:
+                    return
 
                 # Receive social information. Method for collecting social information is called from the simulation module, because it needs access to others Agents objects. 
                 # Here we only set state and reset social information buffer.
                 self.social_information_dict = {}
                 self.set_state(constants.RECEIVING_STATE)
-                time.sleep(constants.RECEIVING_TIME)
+                start_time = time.time()
+                elapsed_time = 0
+                while elapsed_time < constants.RECEIVING_TIME:
+                    if self.do_stop:
+                        return
+                    elapsed_time = time.time() - start_time
+                    time.sleep(0.1)
 
                 # Decision making, based on personal and social information
                 self.set_state(constants.DECISION_MAKING_STATE)
@@ -260,7 +322,13 @@ class Agent:
                 # Disseminate 
                 self.set_state(constants.DISSEMINATION_STATE)
                 dissemination_time = self.get_dissemination_time()
-                time.sleep(dissemination_time)
+                start_time = time.time()
+                elapsed_time = 0
+                while elapsed_time < dissemination_time:
+                    if self.do_stop:
+                        return
+                    elapsed_time = time.time() - start_time
+                    time.sleep(0.1)
         
         decision_making_thread = threading.Thread(target = decision_making_in_loop, name = 'decision_making_thread_' + self.id, daemon = True)
         decision_making_thread.start()
@@ -285,46 +353,64 @@ class Agent:
     def update_opinion(self):
         """Update opinion based on private and social parts of information.
         """
-        private_information = self.get_private_information()
-        social_information = list(self.social_information_dict.values())
-        
+        private_information = np.array(self.get_private_information())
+        social_information = np.array(list(self.social_information_dict.values()))
+
         if not len(social_information) and not len(private_information):
+            return
+        
+        if not social_information.any() and not private_information.any():
             return
         
         if len(social_information):
             if len(private_information):
                 total_information = np.vstack((private_information, social_information))
             else:
-                total_information = social_information
+                total_information = np.copy(social_information)
 
-            for information in total_information:
-                max_index = np.argmax(information)
-                max_value = information[max_index]
-                self.collected_opinions[max_index] += max_value
+            information_histogram = np.zeros_like(total_information[0])
+            selection_weights = np.zeros(len(total_information))
 
-            new_private_information = np.mean(total_information, axis = 0)
+            for i, information in enumerate(total_information):
+                max_value, difference, max_index = utils.get_biggest_element_and_difference_to_second(information)
+                selection_weights[i] = max_value
+                information_histogram[max_index] += max_value
+
+            norm_selection_weights = (selection_weights / np.linalg.norm(selection_weights)) ** 2
+            # new_private_information = random.choices(population = total_information, weights = norm_selection_weights)[0]
+            new_private_information = np.average(total_information, axis = 0, weights = norm_selection_weights)
+
+            self.set_private_information(new_private_information)
+
         else:
             if len(private_information):
-                max_index = np.argmax(private_information)
-                max_value = private_information[max_index]
-                self.collected_opinions[max_index] += max_value
+                information_histogram = np.zeros_like(private_information)
+                max_index = np.where(private_information == max(private_information))[0][0]
+                information_histogram[max_index] += max(private_information)
 
-                new_private_information = private_information          
+        if self.is_forgetting:
+            information_histogram_max_index = np.where(information_histogram == max(information_histogram))[0][0] 
+            mask = np.ones(self.decision_vector.shape, dtype = bool)
+            mask[information_histogram_max_index] = False
+            self.forgetting_factors[mask] += 1
+            self.forgetting_factors[information_histogram_max_index] = 0
+            self.decision_vector[mask] -= np.power(0.5, 7 - self.forgetting_factors[mask])
 
-        self.all_collected_opinions.append(np.copy(self.collected_opinions))
+        self.decision_vector += information_histogram
+        self.decision_vector[np.where(self.decision_vector < 0)] = 0
+
+        self.aggregated_decision_vectors.append(np.copy(self.decision_vector))
 
         try:
-            opinion = list(self.codebook.keys())[np.argmax(self.collected_opinions)]
+            opinion = list(self.codebook.keys())[np.argmax(self.decision_vector)]
         except ValueError:
-            opinion = None
-
-        self.set_private_information(new_private_information)
+            opinion = None 
         self.set_opinion(opinion)
 
-        print(f"Agent: {self.id}, opinion: {opinion}")
+        # print(f"Agent: {self.id}, opinion: {opinion}")
         
-        if opinion is not None:
-            self.set_color(constants.AGENT_COLOR_OPINION_DICT[opinion])
+        # if opinion is not None:
+        #     self.set_color(constants.AGENT_COLOR_OPINION_DICT[opinion])
     
     def get_dissemination_time(self):
         """Calculate dissemination time, based on current opinion.
@@ -332,9 +418,14 @@ class Agent:
         Returns:
             float: Dissemination time in seconds.
         """
-        dissemination_time = constants.MAX_DISSEMINATION_TIME * max(self.collected_opinions) * 10
+        dissemination_time = 10 * np.arctan(10 * max(self.decision_vector) + 0.0001) 
         if dissemination_time > constants.MAX_DISSEMINATION_TIME:
             dissemination_time = constants.MAX_DISSEMINATION_TIME
 
         return dissemination_time
+    
+    def stop_threads(self):
+        self.do_stop = True
+        self.move_thread.join()
+        self.decision_making_thread.join()
         

@@ -13,7 +13,7 @@ def pixelate_image(original_image, new_size):
 def add_gaussian_noise(original_image):
     height, width, channels = original_image.shape
     mean = 0
-    var = 0.1
+    var = 0.15
     sigma = var ** 0.5
     gaussian_noise = np.random.normal(mean, sigma, (height, width, channels))
     gaussian_noise = gaussian_noise.reshape(height, width, channels)
