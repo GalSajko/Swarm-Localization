@@ -4,19 +4,22 @@ it uses subimages to calculate BOW codebook, which is saved as JSON file in 'cod
 
 import cv2
 import glob
-import json
 import math
 import matplotlib.pyplot as plt
 import numpy as np
 import os
-import pickle as pkl
 from scipy.cluster.vq import kmeans, vq
+
+import constants
+import utils
 
 #region DATASET PREPARATION
 ORIGINAL_IMAGES_DIR = 'data/original_images/'
 SUBIMAGES_DIR = 'data/subimages/'
 COLORED_SATELITE_IMAGE_NAME = 'colored_satelite_image.png'
 BW_SATELITE_IMAGE_NAME = 'bw_satelite_image.png'
+
+TRAINING_DATASET = 'ims_gray.npy'
 
 PROJECT_ROOT_DIR = 'Swarm-Localization'
 
@@ -56,7 +59,9 @@ def divide_image_on_subimages_and_save(image, divide_on, remove_old_files = True
     for y in range(divide_on[1]):
         for x in range(divide_on[0]):
             sub_image = image[y * subimage_y_size : (y + 1) * subimage_y_size, x * subimage_x_size : (x + 1) * subimage_x_size]
-            cv2.imwrite(SUBIMAGES_DIR + f"{x + 1}_{y + 1}.png", sub_image)
+            first_index = x + 1 if x + 1 >= 10 else '0' + str(x + 1)
+            second_index = y + 1 if y + 1 >= 10 else '0' + str(y + 1)
+            cv2.imwrite(SUBIMAGES_DIR + f"{first_index}_{second_index}.png", sub_image)
 
 def get_dict_of_dataset_images(dir):
     """Save images and their names in dictionary.
@@ -72,7 +77,7 @@ def get_dict_of_dataset_images(dir):
     for file in os.listdir(dir):
         filename = os.fsdecode(file)
         if filename.endswith(('.png', '.jpg')):
-            image = cv2.imread(dir + filename)
+            image = cv2.imread(dir + filename, cv2.IMREAD_GRAYSCALE)
             filenames_and_images[filename] = image
 
     keys = list(filenames_and_images.keys())
@@ -104,9 +109,9 @@ def is_correct_dir():
 # endregion
 
 #region SIFT 
-NUMBER_OF_CLUSTERS = 64
+NUMBER_OF_CLUSTERS = 256
 
-def sift_visual_features(list_of_images):
+def root_sift_visual_features(list_of_images):
     """Compute keypoints and descriptors with SIFT algorithm.
 
     Args:
@@ -115,14 +120,15 @@ def sift_visual_features(list_of_images):
     Returns:
         tuple[list, list]: Keypoints and descriptors.
     """
-    sift_extractor = cv2.SIFT_create()
+    sift_extractor = constants.SIFT_EXCTRACTOR
     keypoints = []
     descriptors = []
 
     for image in list_of_images:
         img_keypoints, img_descriptors = sift_extractor.detectAndCompute(image, None)
+        root_sift_descriptors = utils.root_sift(img_descriptors)
         keypoints.append(img_keypoints)
-        descriptors.append(img_descriptors)
+        descriptors.append(root_sift_descriptors)
     
     return keypoints, descriptors
 
@@ -146,8 +152,15 @@ def kmeans_over_descriptors(stacked_descriptors):
     Returns:
         numpy.ndarray: Array of centroids.
     """
-    iters = 1
+    iters = 20
     centroids, _ = kmeans(stacked_descriptors, NUMBER_OF_CLUSTERS, iters)
+
+    return centroids.astype(np.float32, copy = False)
+
+def calculate_centroids(dataset):
+    _, descriptors_in_images = root_sift_visual_features(dataset)
+    descriptors_in_images = descriptors_in_images[descriptors_in_images != None]
+    centroids = kmeans_over_descriptors(np.vstack(descriptors_in_images))
 
     return centroids
 
@@ -170,50 +183,12 @@ def map_descriptors_to_centroids(descriptors, centroids):
     return visual_words
 #endregion
 
-#region BOW AND VLAD
-BOW_CODEBOOK_JSON = 'codebooks/bow_codebook.json'
-VISUAL_WORDS_NPY = 'codebooks/visual_words.npy'
-VISUAL_WORDS_IN_IMAGES_PKL = 'codebooks/visual_words_in_images.pkl'
-VISUAL_WORDS_HISTOGRAMS_NPY = 'codebooks/visual_words_histograms.npy'
-VISUAL_WORDS_WEIGHTS_NPY = 'codebooks/visual_words_weights.npy'
+#region VLAD
 VLAD_CENTROIDS_NPY = 'codebooks/vlad_centroids.npy'
 VLAD_VECTORS_NPY = 'codebooks/vlad_vectors.npy'
+TRAINED_CENTROIDS_NPY = 'codebooks/trained_centroids.npy'
 
-def calculate_visual_words_histograms(visual_words):
-    """Calculate how many times each centroid (visual word) appears in each image.
-
-    Args:
-        visual_words (list): List of visual words.
-    
-    Returns:
-        numpy.ndarray: Array of frequency vectors for each image.
-    """
-    frequency_vectors = []
-    for image_as_visual_words in visual_words:
-        image_frequency_vector = np.zeros(NUMBER_OF_CLUSTERS)
-        for visual_word in image_as_visual_words:
-            image_frequency_vector[visual_word] += 1
-        frequency_vectors.append(image_frequency_vector)
-    
-    return(np.stack(frequency_vectors))
-
-def idf(visual_words_histograms):
-    """Calculate the importance of visual words using TFIDF algorithm.
-
-    Args:
-        visual_words_histograms (numpy.ndarray): Histograms of visual words for each image.
-
-    Returns:
-        numpy.ndarray: Weights of the centroids.
-    """
-    number_of_images = len(visual_words_histograms)
-    # Number of images that contain visual words.
-    tf = np.sum(visual_words_histograms > 0, axis = 0)
-    idf = np.log(number_of_images / tf)
-
-    return idf
-
-def calculate_vlad_vectors(descriptors, mapped_descriptors, centroids):
+def calculate_vlad_vectors(descriptors, mapped_descriptors, centroids, normalize = True):
     """Calculate vlad descriptors for all images.
 
     Args:
@@ -224,81 +199,101 @@ def calculate_vlad_vectors(descriptors, mapped_descriptors, centroids):
     Returns:
         numpy.ndarray: Vlad descriptors of all images.
     """
-    vlad_vectors = np.zeros((len(descriptors), len(centroids), len(descriptors[0][0])))
-    for image_index, descriptors_in_image in enumerate(descriptors):
-        for descriptor_index, descriptor in enumerate(descriptors_in_image):
-            centroid_index = mapped_descriptors[image_index][descriptor_index]
-            difference = np.round(descriptor - centroids[centroid_index], 4)
-            vlad_vectors[image_index][centroid_index] += difference
-        print(vlad_vectors[image_index][0])
+    vlad_vectors = np.zeros((len(descriptors), len(centroids), len(descriptors[0][0])), dtype = np.float32)    
+    for i, (descriptor, centroid_indices) in enumerate(zip(descriptors, mapped_descriptors)):
+        if descriptor.size == 0:
+            continue
+
+        descriptor = np.asarray(descriptor, dtype = np.float32)
+        centroid_indices = np.asarray(centroid_indices, dtype = np.int64)
+        
+        residual = descriptor - centroids[centroid_indices]
+        np.add.at(vlad_vectors[i], centroid_indices, residual)
+    
+    if normalize:
+        vlad_vectors = normalize_vlad_vectors(vlad_vectors)
 
     return vlad_vectors
 
+def intra_normalization(vectors):
+    """Apply L2 normalization to vlad vectors row-wise.
 
+    Args:
+        vlad_vectors (numpy.ndarray): Vlad vectors.
+
+    Returns:
+        numpy.ndarray: Intra-normalized vlad vectors.
+    """
+    vectors = np.asarray(vectors, dtype = np.float32, order = 'C')
+
+    eps = 1e-12
+    
+    N, K, D = vectors.shape
+    flat = vectors.reshape(-1, D)
+    norms = np.linalg.norm(flat, axis = 1)
+    mask = norms > eps
+    flat[mask] /= norms[mask, None]
+
+    return flat.reshape(N, K, D)
+
+def global_l2_normalization(vectors):
+    """Apply global l2 normalization on each vlad vector.
+
+    Args:
+        vectors (numpy.ndarray): Vlad vectors.
+
+    Returns:
+        numpy.ndarray: Globaly l2 normalized vlad vectors.
+    """
+    eps = 1e-12
+
+    N, K, D = vectors.shape
+    flat = vectors.reshape(N, -1)
+    norms = np.linalg.norm(flat, axis = 1)
+    mask = norms > eps
+    flat[mask] /= norms[mask, None]
+
+    return flat.reshape(N, K, D)
+
+def normalize_vlad_vectors(vlad_vectors):
+    intra_norm_vectors = intra_normalization(vlad_vectors)
+    global_l2_over_intra_vectors = global_l2_normalization(intra_norm_vectors)
+
+    return global_l2_over_intra_vectors
 #endregion
 
 #region PREPARE AND SAVE
-def save_bow_codebook(tf_idfs, subimages_dict):
-    """Save BOW tfidf codebook to JSON file.
-
-    Args:
-        tf_idfs (numpy.ndarray): Array of tfidf-weighted visual words. 
-        subimages_dict (dict): Dictionary with image names and images.
-    """
-    codebook = {}
-    for idx, tf_idf in enumerate(tf_idfs):
-        image_name = list(subimages_dict.keys())[idx]
-        codebook[image_name] = list(tf_idf)
-
-    with open(BOW_CODEBOOK_JSON, 'w') as file:
-        json.dump(codebook, file)
-
-def prepare_and_save_bow_codebook(subimages):
-    """Prepare bag-of-words tfidf-weighted codebook and save it as JSON file.
-
-    Args:
-        subimages (dict): Dictionary of images and their filenames.
-    """
-    _, descriptors = sift_visual_features(list(subimages.values()))
-    visual_words = kmeans_over_descriptors(np.vstack(descriptors))
-    visual_words_in_images = map_descriptors_to_centroids(descriptors, visual_words)
-
-    visual_words_histograms = calculate_visual_words_histograms(visual_words_in_images)
-    weights = idf(visual_words_histograms)
-
-    tf_idf = visual_words_histograms * weights
-
-    save_bow_codebook(tf_idf, subimages)
-
-    np.save(VISUAL_WORDS_WEIGHTS_NPY, weights)
-    np.save(VISUAL_WORDS_NPY, visual_words)
-    np.save(VISUAL_WORDS_HISTOGRAMS_NPY, visual_words_histograms)  
-    with open(VISUAL_WORDS_IN_IMAGES_PKL, 'wb') as file:
-        pkl.dump(visual_words_in_images, file)
-
-def prepare_and_save_vlad_codebook(subimages):
+def prepare_and_save_vlad_codebook(training_set, testing_set, training = False):
     """Prepare and save VLAD descriptors of database images.
 
     Args:
         subimages (numpy.ndarray): Subimages.
     """
-    keypoints, descriptors = sift_visual_features(list(subimages.values()))
-    centroids = kmeans_over_descriptors(np.vstack(descriptors))
+    if training:
+        centroids = calculate_centroids(training_set)
+        np.save(TRAINED_CENTROIDS_NPY, centroids)
+    else:
+        centroids = np.load(TRAINED_CENTROIDS_NPY)
+
+    _, descriptors = root_sift_visual_features(list(testing_set.values()))
     mapped_descriptors = map_descriptors_to_centroids(descriptors, centroids)
     vlad_vectors = calculate_vlad_vectors(descriptors, mapped_descriptors, centroids)
 
-    np.save(VLAD_CENTROIDS_NPY, centroids)
     np.save(VLAD_VECTORS_NPY, vlad_vectors)
 #endregion
 
 if __name__ == '__main__':
     if is_correct_dir():
-        # divide_image_on_subimages_and_save(cv2.imread(ORIGINAL_IMAGES_DIR + BW_SATELITE_IMAGE_NAME), (5, 3), True)
-        subimages = get_dict_of_dataset_images(SUBIMAGES_DIR)
-        
-        # prepare_and_save_bow_codebook(subimages)
-        prepare_and_save_vlad_codebook(subimages)
+        divide_image_on_subimages_and_save(cv2.imread(ORIGINAL_IMAGES_DIR + BW_SATELITE_IMAGE_NAME, cv2.IMREAD_GRAYSCALE), (10, 10), True)
+
+        training_set = np.load('data/ims_gray.npy')
+        testing_set = get_dict_of_dataset_images(SUBIMAGES_DIR)
+
+        prepare_and_save_vlad_codebook(training_set, testing_set, True)
 
     else:
         print(f"Call script from project's root directory: {PROJECT_ROOT_DIR}")
+
+    
+        
     

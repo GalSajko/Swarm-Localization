@@ -2,6 +2,7 @@ import csv
 import constants
 import matplotlib.pyplot as plt
 import numpy as np
+import os
 import time
 
 RESULTS_FILE = "results.csv"
@@ -31,13 +32,30 @@ def calculate_cosine_similarity(first_vector, second_vector):
     Returns:
         float: Cosine similarity between first and second vector.
     """
-    dot_product = np.dot(first_vector, second_vector)
-    product_of_norms = np.linalg.norm(first_vector) * np.linalg.norm(second_vector)
+    flat_first_vector = first_vector.flatten()
+    flat_second_vector = second_vector.flatten()
+
+    dot_product = np.dot(flat_first_vector, flat_second_vector)
+    product_of_norms = np.linalg.norm(flat_first_vector) * np.linalg.norm(flat_second_vector)
     
     if product_of_norms.any():
         return dot_product / product_of_norms
 
     return -1
+
+def evaluate_similarity(vlad_vectors, codebook):
+    similarity_vector = []
+    for codebook_vector in codebook:
+        similarity_vector.append(np.round(calculate_cosine_similarity(vlad_vectors, codebook_vector), 3))
+    return np.array(similarity_vector)
+
+def softmax_over_vector(vector, tau = 0.05, gamma = 2.5):
+    vector = np.asarray(vector, dtype = np.float32)
+    nom = np.exp(vector / tau)
+    nom_gamma = np.power(nom, gamma)
+    den = nom_gamma.sum()
+
+    return nom / den
 
 def sleep_with_adjustable_period(loop_period, start_time):
     """Sleep for the remaining time, ensuring that the whole loop lasts for desired period.
@@ -83,7 +101,7 @@ def get_biggest_element_and_difference_to_second(list):
 
     return max_value, max_value - second_max_value, sorted_indices[0].astype(np.int8)
 
-def print_results(accuracy, elapsed_time, opinion):
+def print_results(accuracy, elapsed_time):
     """Print experiment results in the terminal.
 
     Args:
@@ -93,10 +111,28 @@ def print_results(accuracy, elapsed_time, opinion):
     if elapsed_time > constants.MAX_EXPERIMENT_TIME:
         print("NO CONSENSUS")
     else:
-        print(f"AVERAGE CONSENSUS TIME: {elapsed_time}, ACCURACY: {accuracy}, OPINION: {opinion}")
+        print(f"AVERAGE CONSENSUS TIME: {elapsed_time}, ACCURACY: {accuracy}")
 
 def write_results_to_csv(accuracy, elapsed_time):
     with open(RESULTS_FILE, 'a', newline = '', encoding = 'utf-8') as f:
         writer = csv.writer(f)
         writer.writerow([elapsed_time, accuracy])
         f.close()
+
+def convert_decision_to_subimage_name(decision, subimage_dir):
+    subimages = sorted(os.listdir(subimage_dir))
+    return subimages[decision]
+
+def root_sift(sift_descriptors):
+    if sift_descriptors is None:
+        return None
+    
+    descriptors = sift_descriptors.astype(np.float32)
+    l1_norm = descriptors.sum(axis = 1, keepdims = True) + 1e-7
+    descriptors /= l1_norm
+    descriptors = np.sqrt(descriptors)
+
+    l2_norm = np.linalg.norm(descriptors, axis = 1, keepdims = True) + 1e-7
+    descriptors = descriptors / l2_norm
+
+    return descriptors

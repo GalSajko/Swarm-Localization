@@ -1,22 +1,20 @@
-import csv
-import json
-import threading
-import time
-
-from matplotlib import pyplot as plt
-import constants
+from collections import Counter
 import cv2
 import numpy as np
 import sys
-
+import threading
+import time
 
 from agent import Agent
+import constants
+import image_augmentation as ia
 import utils
 
+NUMBER_OF_TRIALS = 100
 IMAGE_DIR = "data/subimages/"
 
 consensus_times = []
-final_opinions = []
+final_decisions = []
 agents_data_locker = threading.Lock()
 
 def calculate_initial_positions(image):
@@ -60,7 +58,7 @@ def visualize_agent(position, image, color):
     cv2.rectangle(image, start_point, end_point, color, 5)
     cv2.circle(image, position.astype(np.int32), constants.COMMUNICATION_RANGE, (255, 255, 0), 2)
 
-def check_for_consenus(opinions, agents):
+def check_for_consenus(decisions, agents):
     """Check if agents have reached a consensus.
 
     Args:
@@ -70,113 +68,99 @@ def check_for_consenus(opinions, agents):
     Returns:
         bool: True if consensus has been reached, False otherwise.
     """
-    if len(opinions) != len(agents) or opinions[0] is None:
+    if len(decisions) != len(agents) or decisions[0] is None:
         return False
-    return opinions.count(opinions[0]) == len(opinions)
+    return decisions.count(decisions[0]) == len(decisions)
 
-def experiment(original_image, algorithm, is_forgetting, visualize = False, image_name = None):
+def experiment(test_image):
     """Single run of the experiment.
 
     Args:
-        original_image (numpy.ndarray): Original image.
-        is_forgetting (bool): True if forgetting is active, False otherwise.
-        visualize (bool, optional): True if visualization is active, False otherwise. Defaults to False.
-        image_name (string, optional): Name of the original (sub)image. Defaults to None.
+        test_image (string): Name of the testing image from subimages folder.
     """
-    centroids = np.load('codebooks/visual_words.npy')
-    weights = np.load('codebooks/visual_words_weights.npy')
-    with open('codebooks/bow_codebook.json', 'r') as file:
-        codebook = json.load(file)
+    centroids = np.load('codebooks/trained_centroids.npy')
+    codebook = np.load('codebooks/vlad_vectors.npy')
 
-    positions = calculate_initial_positions(original_image)
-    agents = [Agent(original_image, algorithm, centroids, codebook, positions[i], str(i), is_forgetting = is_forgetting, weights = weights) for i in range(len(positions))]
+    for i in range(NUMBER_OF_TRIALS):
+        positions = calculate_initial_positions(test_image)
+        agents = [Agent(test_image, centroids, codebook, positions[i], str(i)) for i in range(len(positions))]
 
-    start_time = time.time()
-    elapsed_time = 0
-    while True:
-        image_copy = np.copy(original_image)
+        start_time = time.time()
+        elapsed_time = 0
 
-        opinions = []
-        for agent in agents:
-            # visualize_agent(agent.get_position(), image_copy, agent.get_color())
-            visualize_agent(agent.get_position(), image_copy, (255, 0, 0))
-            if agent.get_state() == constants.RECEIVING_STATE:
-                agent.collect_social_information(agents)
-            
-            opinions.append(agent.get_opinion())
-        
-        if check_for_consenus(opinions, agents) or elapsed_time > constants.MAX_EXPERIMENT_TIME:
-            # consensus_times.append(elapsed_time)
+        while True:
+            image_copy = np.copy(test_image)
+
+            decisions = []
+            # opinions = []
             for agent in agents:
-                agent.stop_threads()
-            break
-        
-        if visualize:
-            cv2.imshow(f"{image_name}", image_copy)
-        cv2.waitKey(1)
+                visualize_agent(agent.get_position(), image_copy, (255, 0, 0))
+                if agent.get_state() == constants.RECEIVING_STATE:
+                    agent.collect_opinions(agents)
+                
+                decisions.append(agent.calculate_decision())
+                # opinions.append(agent.opinions)
+            
+            # print(dict(Counter(decisions)))
 
-        elapsed_time = time.time() - start_time
+            if check_for_consenus(decisions, agents) or elapsed_time > constants.MAX_EXPERIMENT_TIME:
+                consensus_times.append(elapsed_time)
+                for agent in agents:
+                    agent.stop_threads()
+                break
+            
+            cv2.imshow(f"{test_image}", image_copy)
+            cv2.waitKey(1)
 
-    with agents_data_locker:
+            elapsed_time = time.time() - start_time
+
+            time.sleep(0.01)
+
+        decision = utils.convert_decision_to_subimage_name(decisions[0], IMAGE_DIR) if elapsed_time < constants.MAX_EXPERIMENT_TIME else 'NO DECISION'
+        print(f'TRIAL: {i + 1}, DECISION ON: {decision}, CONSENSUS TIME: {elapsed_time}')
+
         consensus_times.append(elapsed_time)
-        final_opinions.append(opinions[0])
-    
-def run_experiment_in_threads(number_of_threads, original_image, algorithm, is_forgetting):
-    """Run experiment in multiple threads.
+        final_decisions.append(decision)
 
-    Args:
-        number_of_threads (int): Number of threads.
-        original_image (string): Name of the original (sub)image.
-        is_forgetting (bool): True if forgetting is active, False otherwise.
-
-    Returns:
-        list: List of threads.
-    """    
-    threads = [threading.Thread(target = experiment, daemon = False, args = (original_image, algorithm, is_forgetting, )) for _ in range(number_of_threads)]
-    [thread.start() for thread in threads]
-    
-    return threads
-
-def main(image_name, algorithm, is_forgetting, number_of_threads, visualize):
+def main(image_name):
     """Main experiment entry.
 
     Args:
         image_name (string): Name of the original image.
-        is_forgetting (bool): True if forgetting is active, False otherwise.
-        number_of_threads (int): Number of experiment threads.
-        visualize (bool): True if visualization is active, False otherwise.
     """
-    if visualize and number_of_threads != 1:
-            print("Can't visualize in more than one thread.")
-            return
+    subimage = cv2.imread(IMAGE_DIR + image_name + '.png')
 
-    original_image = cv2.imread(IMAGE_DIR + image_name + '.png')
+    # position = [500, 500]
+    # start_point = np.array(position - constants.AGENT_SIZE / 2).astype(np.int32)
+    # end_point = np.array(position + constants.AGENT_SIZE / 2).astype(np.int32)
 
-    if visualize:
-        experiment(original_image, algorithm, is_forgetting, visualize, image_name)
-    else:
-        experiment_threads = run_experiment_in_threads(number_of_threads, original_image, algorithm, is_forgetting)
-        [thread.join() for thread in experiment_threads]
+    # photo = subimage[
+    #         int(position[1] - constants.AGENT_SIZE[0] / 2) : int(position[1] + constants.AGENT_SIZE[0] / 2),
+    #         int(position[0] - constants.AGENT_SIZE[1] / 2) : int(position[0] + constants.AGENT_SIZE[1] / 2)
+    #         ]
+
+    # photo = ia.pixelate_image(photo, (100, 100))
+    # photo = ia.add_gaussian_noise(photo)
+    # photo = ia.augment_camera_effects(photo)
+
+    # cv2.imshow('photo', photo)
+    # cv2.rectangle(subimage, start_point, end_point, (0, 0, 255), 5)
+    # cv2.imshow('area', subimage)
+    # cv2.waitKey(0)
+
+
+    experiment(subimage)
     
     consensus_time = np.mean(consensus_times)
-    accuracy = final_opinions.count(image_name + '.png') / number_of_threads if consensus_time < constants.MAX_EXPERIMENT_TIME else 0
+    accuracy = final_decisions.count(image_name + '.png') / NUMBER_OF_TRIALS
 
-    utils.print_results(accuracy, consensus_time, final_opinions[0])
+    print(f'ACCURACY: {accuracy}, AVERAGE CONSENSUS TIME: {consensus_time}')
+
     utils.write_results_to_csv(accuracy, consensus_time)
-
-    # plt.hist(consensus_times, bins = 15)
-    # plt.show()
-    
-    # for agent in agents:
-    #     utils.draw_opinions(agent.aggregated_decision_vectors, agent.id)
 
 if __name__ == "__main__":
     image_name = sys.argv[1]
-    algorithm = sys.argv[2]
-    # is_forgetting = bool(int(sys.argv[3]))
-    # number_of_threads = int(sys.argv[4])
-    # visualize = bool(int(sys.argv[5]))
     
-    main(image_name, algorithm, False, 1, True)
+    main(image_name)
 
     
