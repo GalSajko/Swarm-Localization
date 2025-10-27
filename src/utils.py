@@ -1,11 +1,12 @@
 import csv
+import cv2
 import constants
 import matplotlib.pyplot as plt
 import numpy as np
 import os
 import time
 
-RESULTS_FILE = "results.csv"
+OPINION_DYNAMICS_FILE = "opinion_dynamics.csv"
 
 def set_timer(low, max):
     """Set random timer for uniformly distributed values.
@@ -113,15 +114,15 @@ def print_results(accuracy, elapsed_time):
     else:
         print(f"AVERAGE CONSENSUS TIME: {elapsed_time}, ACCURACY: {accuracy}")
 
-def write_results_to_csv(accuracy, elapsed_time):
-    with open(RESULTS_FILE, 'a', newline = '', encoding = 'utf-8') as f:
+def write_results_to_csv(filename, data_to_write):
+    with open(filename, 'a', newline = '', encoding = 'utf-8') as f:
         writer = csv.writer(f)
-        writer.writerow([elapsed_time, accuracy])
+        writer.writerow(data_to_write)
         f.close()
 
 def convert_decision_to_subimage_name(decision, subimage_dir):
     subimages = sorted(os.listdir(subimage_dir))
-    return subimages[decision]
+    return subimages[decision][:-4]
 
 def root_sift(sift_descriptors):
     if sift_descriptors is None:
@@ -136,3 +137,11 @@ def root_sift(sift_descriptors):
     descriptors = descriptors / l2_norm
 
     return descriptors
+
+def select_random_image(image_dir):
+    subimages = sorted(os.listdir(image_dir))
+    random_index = np.random.randint(0, len(subimages))
+    random_image_name = subimages[random_index]
+    random_image = cv2.imread(os.path.join(image_dir, random_image_name))
+
+    return random_image, random_image_name[:-4]

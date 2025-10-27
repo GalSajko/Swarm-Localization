@@ -4,6 +4,7 @@ it uses subimages to calculate BOW codebook, which is saved as JSON file in 'cod
 
 import cv2
 import glob
+import json
 import math
 import matplotlib.pyplot as plt
 import numpy as np
@@ -126,6 +127,8 @@ def root_sift_visual_features(list_of_images):
 
     for image in list_of_images:
         img_keypoints, img_descriptors = sift_extractor.detectAndCompute(image, None)
+        if img_descriptors is None:
+            img_descriptors = np.empty((constants.SIFT_EXCTRACTOR.descriptorSize(), 128), dtype = np.float32)
         root_sift_descriptors = utils.root_sift(img_descriptors)
         keypoints.append(img_keypoints)
         descriptors.append(root_sift_descriptors)
@@ -174,13 +177,13 @@ def map_descriptors_to_centroids(descriptors, centroids):
     Returns:
         numpy.ndarray: List of visual words for each image.
     """
-    visual_words = []
+    mapped_descriptors = []
     for descriptor in descriptors:
         # For each descriptor return index of centroid the descriptor belongs to.
         visual_words_in_image, _ = vq(descriptor, centroids)
-        visual_words.append(visual_words_in_image)
+        mapped_descriptors.append(visual_words_in_image)
     
-    return visual_words
+    return mapped_descriptors
 #endregion
 
 #region VLAD
@@ -282,14 +285,34 @@ def prepare_and_save_vlad_codebook(training_set, testing_set, training = False):
     np.save(VLAD_VECTORS_NPY, vlad_vectors)
 #endregion
 
+def create_similarity_json(codebook, testing_set):
+    """Create JSON file with filenames of 5 most similar images for each image in the dataset.
+
+    Args:
+        codebook (numpy.ndarray): Codebook of visual words.
+        testing_set (dict): Dictionary of images in the dataset.
+    """
+    filenames = list(testing_set.keys())
+    similarity_dict = {}
+    for i, filename in enumerate(filenames):
+        similarity_vector = utils.evaluate_similarity(codebook[i], codebook)
+        ten_best_indices = list(np.argsort(similarity_vector)[::-1][1:51])
+        ten_best_filenames = [filenames[index] for index in ten_best_indices]
+        similarity_dict[filename] = {fn : float(similarity_vector[ten_best_indices[i]]) for i, fn in enumerate(ten_best_filenames)}
+
+    with open('data/similarity_table.json', 'w') as f:
+        json.dump(similarity_dict, f, indent = 4)
+
 if __name__ == '__main__':
     if is_correct_dir():
-        divide_image_on_subimages_and_save(cv2.imread(ORIGINAL_IMAGES_DIR + BW_SATELITE_IMAGE_NAME, cv2.IMREAD_GRAYSCALE), (10, 10), True)
+        # divide_image_on_subimages_and_save(cv2.imread(ORIGINAL_IMAGES_DIR + BW_SATELITE_IMAGE_NAME, cv2.IMREAD_GRAYSCALE), (20, 20), True)
 
         training_set = np.load('data/ims_gray.npy')
         testing_set = get_dict_of_dataset_images(SUBIMAGES_DIR)
 
-        prepare_and_save_vlad_codebook(training_set, testing_set, True)
+        create_similarity_json(np.load(VLAD_VECTORS_NPY), testing_set)
+
+        # prepare_and_save_vlad_codebook(training_set, testing_set, True)
 
     else:
         print(f"Call script from project's root directory: {PROJECT_ROOT_DIR}")

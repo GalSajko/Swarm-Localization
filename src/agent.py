@@ -1,3 +1,4 @@
+from collections import Counter
 import cv2
 import matplotlib.pyplot as plt
 import numpy as np
@@ -47,6 +48,11 @@ class Agent:
 
         self.move_thread = self.move_in_thread()
         self.decision_making_thread = self.start_decision_making_thread()
+
+        # Data collection variables
+        self.ratios = []
+        self.personal_information_history = []
+        self.social_information_history = []
 
     def get_position(self):
         """Get current position in a thread-safe way.
@@ -131,7 +137,7 @@ class Agent:
             ]
         
         try:
-            photo = ia.pixelate_image(photo, (58, 40))
+            # photo = ia.pixelate_image(photo, (2/3) * constants.AGENT_SIZE)
             photo = ia.add_gaussian_noise(photo)
         except Exception:
             pass
@@ -194,7 +200,7 @@ class Agent:
         def exploration():
             """Take photos and calculate sift descriptors.
             """
-            descriptor_buffer_length = 30
+            descriptor_buffer_length = 50
             while not self.do_stop:
                 photo = self.capture_photo()
                 self.update_descriptors(photo)
@@ -215,8 +221,11 @@ class Agent:
     
     # TODO: Move to another file.
     def update_descriptors(self, photo):
-        _, sift_descriptors = self.sift_extractor.detectAndCompute(photo.astype(np.uint8), None)
-        root_sift_descriptors = utils.root_sift(sift_descriptors)
+        try:
+            _, sift_descriptors = self.sift_extractor.detectAndCompute(photo.astype(np.uint8), None)
+            root_sift_descriptors = utils.root_sift(sift_descriptors)
+        except cv2.error:
+            return
         try:
             for descriptor in root_sift_descriptors:
                 self.descriptors.append(descriptor)
@@ -262,7 +271,13 @@ class Agent:
 
                 # Decision making, based on personal and social information
                 self.set_state(constants.DECISION_MAKING_STATE)
-                self.opinions += dm.asodm(self.get_personal_information(), self.social_factor, np.array(list(self.social_information_dict.values())), len(self.codebook))
+                
+                new_opinion, pi, si, ratio = dm.asodm(self.get_personal_information(), self.social_factor, np.array(list(self.social_information_dict.values())), len(self.codebook))
+                self.opinions += new_opinion
+
+                # self.ratios.append(ratio)
+                # self.personal_information_history.append(pi)
+                # self.social_information_history.append(si)
 
                 self.set_decision(self.calculate_decision())
 
@@ -297,6 +312,11 @@ class Agent:
                 if agent.get_state() == constants.DISSEMINATION_STATE:
                     agent_information = agent.opinions
                     if len(agent_information):
+                        # max_opinion_index = np.argmax(agent_information)
+                        # social_information = np.zeros_like(agent_information)
+                        # social_information[max_opinion_index] = agent_information[max_opinion_index]
+                        # self.social_information_dict[agent.id] = social_information
+                        
                         self.social_information_dict[agent.id] = agent_information 
     
     def calculate_decision(self):
@@ -310,7 +330,7 @@ class Agent:
         Returns:
             float: Dissemination time in seconds.
         """
-        dissemination_time = np.max(self.opinions) / constants.DECISION_THRESHOLD
+        dissemination_time = constants.MAX_DISSEMINATION_TIME * np.max(self.opinions) / constants.DECISION_THRESHOLD
         if dissemination_time > constants.MAX_DISSEMINATION_TIME:
             dissemination_time = constants.MAX_DISSEMINATION_TIME
 

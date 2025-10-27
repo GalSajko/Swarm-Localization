@@ -1,6 +1,7 @@
 from collections import Counter
 import cv2
 import numpy as np
+import matplotlib.pyplot as plt
 import sys
 import threading
 import time
@@ -29,10 +30,10 @@ def calculate_initial_positions(image):
     number_in_x = 5
     number_in_y = 4
 
-    initial_padding = 350
+    initial_padding = [image.shape[1] - constants.AGENT_SIZE[0], image.shape[0] - constants.AGENT_SIZE[1]]
 
-    x_positions = np.linspace(initial_padding, image.shape[1] - initial_padding, number_in_x)
-    y_positions = np.linspace(initial_padding, image.shape[0] - initial_padding, number_in_y)
+    x_positions = np.linspace(initial_padding[0], image.shape[1] - initial_padding[0], number_in_x)
+    y_positions = np.linspace(initial_padding[1], image.shape[0] - initial_padding[1], number_in_y)
 
     positions = []
 
@@ -56,7 +57,7 @@ def visualize_agent(position, image, color):
     if color:
         color = tuple(reversed(color))
     cv2.rectangle(image, start_point, end_point, color, 5)
-    cv2.circle(image, position.astype(np.int32), constants.COMMUNICATION_RANGE, (255, 255, 0), 2)
+    # cv2.circle(image, position.astype(np.int32), constants.COMMUNICATION_RANGE, (255, 255, 0), 2)
 
 def check_for_consenus(decisions, agents):
     """Check if agents have reached a consensus.
@@ -72,95 +73,73 @@ def check_for_consenus(decisions, agents):
         return False
     return decisions.count(decisions[0]) == len(decisions)
 
-def experiment(test_image):
+def experiment(trial, image_code):
     """Single run of the experiment.
 
     Args:
-        test_image (string): Name of the testing image from subimages folder.
+        test_image (string): Name of the testing image from subimages folder or 'r' for random.
     """
+    if image_code == 'r':
+        test_image, test_image_name = utils.select_random_image(IMAGE_DIR)
+    else:
+        test_image = cv2.imread(IMAGE_DIR + image_code + '.png')
+        test_image_name = image_code 
+
+    print(f'TRIAL: {trial + 1}, SELECTED IMAGE: {test_image_name}')
+
     centroids = np.load('codebooks/trained_centroids.npy')
     codebook = np.load('codebooks/vlad_vectors.npy')
 
-    for i in range(NUMBER_OF_TRIALS):
-        positions = calculate_initial_positions(test_image)
-        agents = [Agent(test_image, centroids, codebook, positions[i], str(i)) for i in range(len(positions))]
+    positions = calculate_initial_positions(test_image)
+    agents = [Agent(test_image, centroids, codebook, positions[i], str(i)) for i in range(len(positions))]
 
-        start_time = time.time()
-        elapsed_time = 0
+    start_time = time.time()
+    elapsed_time = 0
 
-        while True:
-            image_copy = np.copy(test_image)
+    while True:
+        image_copy = np.copy(test_image)
 
-            decisions = []
-            # opinions = []
+        decisions = []
+        for agent in agents:
+            visualize_agent(agent.get_position(), image_copy, (255, 0, 0))
+            if agent.get_state() == constants.RECEIVING_STATE:
+                agent.collect_opinions(agents)
+            
+            decisions.append(agent.calculate_decision())
+
+        if check_for_consenus(decisions, agents) or elapsed_time > constants.MAX_EXPERIMENT_TIME:
+            consensus_times.append(elapsed_time)
             for agent in agents:
-                visualize_agent(agent.get_position(), image_copy, (255, 0, 0))
-                if agent.get_state() == constants.RECEIVING_STATE:
-                    agent.collect_opinions(agents)
-                
-                decisions.append(agent.calculate_decision())
-                # opinions.append(agent.opinions)
-            
-            # print(dict(Counter(decisions)))
+                agent.stop_threads()
 
-            if check_for_consenus(decisions, agents) or elapsed_time > constants.MAX_EXPERIMENT_TIME:
-                consensus_times.append(elapsed_time)
-                for agent in agents:
-                    agent.stop_threads()
-                break
-            
-            cv2.imshow(f"{test_image}", image_copy)
-            cv2.waitKey(1)
+            decision = utils.convert_decision_to_subimage_name(decisions[0], IMAGE_DIR) if elapsed_time < constants.MAX_EXPERIMENT_TIME else 'NO DECISION'
 
-            elapsed_time = time.time() - start_time
+            print(f'FINAL DECISION: {decision}, ELAPSED TIME: {elapsed_time}')
 
-            time.sleep(0.01)
+            cv2.destroyAllWindows()
+            return test_image_name, decision, elapsed_time
 
-        decision = utils.convert_decision_to_subimage_name(decisions[0], IMAGE_DIR) if elapsed_time < constants.MAX_EXPERIMENT_TIME else 'NO DECISION'
-        print(f'TRIAL: {i + 1}, DECISION ON: {decision}, CONSENSUS TIME: {elapsed_time}')
+        # cv2.imshow(f'{test_image_name}', image_copy)
+        # cv2.waitKey(1)
 
-        consensus_times.append(elapsed_time)
-        final_decisions.append(decision)
+        elapsed_time = time.time() - start_time
+        time.sleep(0.01)
 
-def main(image_name):
+def main(image_code, results_filename):
     """Main experiment entry.
 
     Args:
-        image_name (string): Name of the original image.
+        image_code (string): Name of the original image or 'r' for randomly selected image.
     """
-    subimage = cv2.imread(IMAGE_DIR + image_name + '.png')
-
-    # position = [500, 500]
-    # start_point = np.array(position - constants.AGENT_SIZE / 2).astype(np.int32)
-    # end_point = np.array(position + constants.AGENT_SIZE / 2).astype(np.int32)
-
-    # photo = subimage[
-    #         int(position[1] - constants.AGENT_SIZE[0] / 2) : int(position[1] + constants.AGENT_SIZE[0] / 2),
-    #         int(position[0] - constants.AGENT_SIZE[1] / 2) : int(position[0] + constants.AGENT_SIZE[1] / 2)
-    #         ]
-
-    # photo = ia.pixelate_image(photo, (100, 100))
-    # photo = ia.add_gaussian_noise(photo)
-    # photo = ia.augment_camera_effects(photo)
-
-    # cv2.imshow('photo', photo)
-    # cv2.rectangle(subimage, start_point, end_point, (0, 0, 255), 5)
-    # cv2.imshow('area', subimage)
-    # cv2.waitKey(0)
-
-
-    experiment(subimage)
-    
-    consensus_time = np.mean(consensus_times)
-    accuracy = final_decisions.count(image_name + '.png') / NUMBER_OF_TRIALS
-
-    print(f'ACCURACY: {accuracy}, AVERAGE CONSENSUS TIME: {consensus_time}')
-
-    utils.write_results_to_csv(accuracy, consensus_time)
+    for trial in range(NUMBER_OF_TRIALS):
+        image, decision, elapsed_time = experiment(trial, image_code)
+        data_to_write = [image, decision, elapsed_time]
+        utils.write_results_to_csv(results_filename, data_to_write)
 
 if __name__ == "__main__":
-    image_name = sys.argv[1]
-    
-    main(image_name)
+    image_code = sys.argv[1]
+    results_filename = sys.argv[2]
+
+    main(image_code, results_filename)
 
     
