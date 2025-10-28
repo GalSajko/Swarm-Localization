@@ -121,7 +121,7 @@ def write_results_to_csv(filename, data_to_write):
         f.close()
 
 def convert_decision_to_subimage_name(decision, subimage_dir):
-    subimages = sorted(os.listdir(subimage_dir))
+    subimages = sorted([f for f in os.listdir(subimage_dir) if f.lower().endswith('.png')])
     return subimages[decision][:-4]
 
 def root_sift(sift_descriptors):
@@ -139,7 +139,7 @@ def root_sift(sift_descriptors):
     return descriptors
 
 def select_random_image(image_dir):
-    subimages = sorted(os.listdir(image_dir))
+    subimages = sorted([f for f in os.listdir(image_dir) if f.lower().endswith('.png')])
     random_index = np.random.randint(0, len(subimages))
     random_image_name = subimages[random_index]
     random_image = cv2.imread(os.path.join(image_dir, random_image_name))

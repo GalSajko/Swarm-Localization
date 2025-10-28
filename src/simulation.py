@@ -13,6 +13,8 @@ import utils
 
 NUMBER_OF_TRIALS = 100
 IMAGE_DIR = "data/subimages/"
+CENTROIDS_PATH = "codebooks/trained_centroids.npy"
+CODEBOOK_PATH = "codebooks/vlad_vectors.npy"
 
 consensus_times = []
 final_decisions = []
@@ -87,8 +89,8 @@ def experiment(trial, image_code):
 
     print(f'TRIAL: {trial + 1}, SELECTED IMAGE: {test_image_name}')
 
-    centroids = np.load('codebooks/trained_centroids.npy')
-    codebook = np.load('codebooks/vlad_vectors.npy')
+    centroids = np.load(CENTROIDS_PATH)
+    codebook = np.load(CODEBOOK_PATH)
 
     positions = calculate_initial_positions(test_image)
     agents = [Agent(test_image, centroids, codebook, positions[i], str(i)) for i in range(len(positions))]

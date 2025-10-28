@@ -95,6 +95,8 @@ def remove_files_from_dir(dir):
     """
     files = glob.glob(dir + '*')
     for file in files:
+        if os.path.basename(file) == '.gitkeep':
+            continue
         os.remove(file)
 
 def is_correct_dir():
