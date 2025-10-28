@@ -20,7 +20,7 @@ SUBIMAGES_DIR = 'data/subimages/'
 COLORED_SATELITE_IMAGE_NAME = 'colored_satelite_image.png'
 BW_SATELITE_IMAGE_NAME = 'bw_satelite_image.png'
 
-TRAINING_DATASET = 'ims_gray.npy'
+TRAINING_DATASET = 'training_data/ims_gray.npy'
 
 PROJECT_ROOT_DIR = 'Swarm-Localization'
 
@@ -308,7 +308,7 @@ if __name__ == '__main__':
     if is_correct_dir():
         # divide_image_on_subimages_and_save(cv2.imread(ORIGINAL_IMAGES_DIR + BW_SATELITE_IMAGE_NAME, cv2.IMREAD_GRAYSCALE), (20, 20), True)
 
-        training_set = np.load('data/ims_gray.npy')
+        training_set = np.load(TRAINING_DATASET)
         testing_set = get_dict_of_dataset_images(SUBIMAGES_DIR)
 
         create_similarity_json(np.load(VLAD_VECTORS_NPY), testing_set)
