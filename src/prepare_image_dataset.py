@@ -189,7 +189,6 @@ def map_descriptors_to_centroids(descriptors, centroids):
 #endregion
 
 #region VLAD
-VLAD_CENTROIDS_NPY = 'codebooks/vlad_centroids.npy'
 VLAD_VECTORS_NPY = 'codebooks/vlad_vectors.npy'
 TRAINED_CENTROIDS_NPY = 'codebooks/trained_centroids.npy'
 
