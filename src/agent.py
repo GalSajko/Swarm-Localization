@@ -39,6 +39,7 @@ class Agent:
         self.opinions = np.zeros(len(self.codebook))
 
         self.social_factor = 2.0
+        self.decision_threshold = np.ones_like(self.opinions) * constants.INITIAL_DECISION_THRESHOLD
 
         # Opinion is defined as name of the subimage.
         self.decision = None
@@ -48,11 +49,6 @@ class Agent:
 
         self.move_thread = self.move_in_thread()
         self.decision_making_thread = self.start_decision_making_thread()
-
-        # Data collection variables
-        self.ratios = []
-        self.personal_information_history = []
-        self.social_information_history = []
 
     def get_position(self):
         """Get current position in a thread-safe way.
@@ -129,6 +125,11 @@ class Agent:
             self.state = value
     
     def capture_photo(self):
+        """Capture a patch centered at the agent's position with size constants.AGENT_SIZE and apply gaussian noise over it.
+
+        Returns:
+            numpy.ndarray: Cropped image patch.
+        """
         current_position = self.get_position()
 
         photo = self.original_image[
@@ -191,8 +192,6 @@ class Agent:
 
     def start_exploration_thread(self):
         """Start thread for exploring the environment.
-
-        exploration_period (float): Desired exploration time.
 
         Returns:
             Thread: Thread object.
@@ -272,12 +271,16 @@ class Agent:
                 # Decision making, based on personal and social information
                 self.set_state(constants.DECISION_MAKING_STATE)
                 
-                new_opinion, pi, si, ratio = dm.asodm(self.get_personal_information(), self.social_factor, np.array(list(self.social_information_dict.values())), len(self.codebook))
+                received_opinions = np.array(list(self.social_information_dict.values()))
+                new_opinion = dm.asodm(self.get_personal_information(), self.social_factor, received_opinions, len(self.codebook), self.decision_threshold)
                 self.opinions += new_opinion
 
-                # self.ratios.append(ratio)
-                # self.personal_information_history.append(pi)
-                # self.social_information_history.append(si)
+                self.update_decision_threshold(received_opinions)
+
+                # print(self.decision_threshold)
+
+                # if self.id == '0':
+                #     print(self.decision_threshold)
 
                 self.set_decision(self.calculate_decision())
 
@@ -320,9 +323,30 @@ class Agent:
                         self.social_information_dict[agent.id] = agent_information 
     
     def calculate_decision(self):
-        if np.max(self.opinions) >= constants.DECISION_THRESHOLD:
+        """Calculate current decision based on opinions.
+
+        Returns:
+            int: Id of the decided subimage or None if no decision has been made yet.
+        """
+        if np.max(self.opinions) >= self.decision_threshold[np.argmax(self.opinions)]:
             return np.argmax(self.opinions)
         return None
+    
+    def update_decision_threshold(self, received_opinions):
+        """Update decision threshold based on received opinions.
+
+        Args:
+            received_opinions (list): List of received opinions.
+        """
+        if not received_opinions.size:
+            return
+        
+        combined_opinions = np.vstack((received_opinions, self.opinions))
+        max_counts = np.zeros(len(self.codebook))
+        for opinions in combined_opinions:
+            max_counts[np.argmax(opinions)] += 1
+        
+        self.decision_threshold = constants.INITIAL_DECISION_THRESHOLD * np.e ** (-0.5 * max_counts)
     
     def get_dissemination_time(self):
         """Calculate dissemination time, based on current opinion.
@@ -330,7 +354,7 @@ class Agent:
         Returns:
             float: Dissemination time in seconds.
         """
-        dissemination_time = constants.MAX_DISSEMINATION_TIME * np.max(self.opinions) / constants.DECISION_THRESHOLD
+        dissemination_time = constants.MAX_DISSEMINATION_TIME * np.max(self.opinions) / constants.INITIAL_DECISION_THRESHOLD
         if dissemination_time > constants.MAX_DISSEMINATION_TIME:
             dissemination_time = constants.MAX_DISSEMINATION_TIME
 
