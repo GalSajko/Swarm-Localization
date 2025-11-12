@@ -168,5 +168,8 @@ cython_debug/
 /codebooks/
 
 !data/.gitkeep
+!data/original_images/.gitkeep
+!data/subimages/.gitkeep
+!data/training_data/.gitkeep
 !results/.gitkeep
 !codebooks/.gitkeep
