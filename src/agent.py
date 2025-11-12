@@ -38,6 +38,9 @@ class Agent:
         self.social_information_dict = {}
         self.opinions = np.zeros(len(self.codebook))
 
+        # For results only
+        self.max_opinions = []
+
         self.social_factor = 2.0
         self.decision_threshold = np.ones_like(self.opinions) * constants.INITIAL_DECISION_THRESHOLD
 
@@ -220,6 +223,11 @@ class Agent:
     
     # TODO: Move to another file.
     def update_descriptors(self, photo):
+        """Update list of local descriptors.
+
+        Args:
+            photo (numpy.ndarray): PHoto taken by the agent.
+        """
         try:
             _, sift_descriptors = self.sift_extractor.detectAndCompute(photo.astype(np.uint8), None)
             root_sift_descriptors = utils.root_sift(sift_descriptors)
@@ -232,6 +240,8 @@ class Agent:
             return
         
     def calculate_vlad_vector(self):
+        """Calculate VLAD vector.
+        """
         if not self.descriptors:
             return
         mapped_descriptors, _ = vq(self.descriptors, self.centroids)
@@ -275,12 +285,7 @@ class Agent:
                 new_opinion = dm.asodm(self.get_personal_information(), self.social_factor, received_opinions, len(self.codebook), self.decision_threshold)
                 self.opinions += new_opinion
 
-                self.update_decision_threshold(received_opinions)
-
-                # print(self.decision_threshold)
-
-                # if self.id == '0':
-                #     print(self.decision_threshold)
+                # self.update_decision_threshold(received_opinions)
 
                 self.set_decision(self.calculate_decision())
 
@@ -294,6 +299,9 @@ class Agent:
                         break
                     elapsed_time = time.time() - start_time
                     time.sleep(0.1)
+
+                # For results only
+                self.max_opinions.append(np.argmax(self.opinions))
 
             exploration_thread.join()
 
@@ -315,11 +323,6 @@ class Agent:
                 if agent.get_state() == constants.DISSEMINATION_STATE:
                     agent_information = agent.opinions
                     if len(agent_information):
-                        # max_opinion_index = np.argmax(agent_information)
-                        # social_information = np.zeros_like(agent_information)
-                        # social_information[max_opinion_index] = agent_information[max_opinion_index]
-                        # self.social_information_dict[agent.id] = social_information
-                        
                         self.social_information_dict[agent.id] = agent_information 
     
     def calculate_decision(self):
@@ -341,12 +344,12 @@ class Agent:
         if not received_opinions.size:
             return
         
-        combined_opinions = np.vstack((received_opinions, self.opinions))
         max_counts = np.zeros(len(self.codebook))
-        for opinions in combined_opinions:
+        for opinions in received_opinions:
             max_counts[np.argmax(opinions)] += 1
-        
-        self.decision_threshold = constants.INITIAL_DECISION_THRESHOLD * np.e ** (-0.5 * max_counts)
+
+        self.decision_threshold = self.decision_threshold - np.power(max_counts, 1.2) + 2
+        np.clip(self.decision_threshold, 5.0, constants.INITIAL_DECISION_THRESHOLD, out = self.decision_threshold)
     
     def get_dissemination_time(self):
         """Calculate dissemination time, based on current opinion.
@@ -354,14 +357,16 @@ class Agent:
         Returns:
             float: Dissemination time in seconds.
         """
-        dissemination_time = constants.MAX_DISSEMINATION_TIME * np.max(self.opinions) / constants.INITIAL_DECISION_THRESHOLD
+        decision_threshold = self.decision_threshold[np.argmax(self.opinions)]
+        dissemination_time = constants.MAX_DISSEMINATION_TIME * np.max(self.opinions) / decision_threshold
         if dissemination_time > constants.MAX_DISSEMINATION_TIME:
             dissemination_time = constants.MAX_DISSEMINATION_TIME
 
         return dissemination_time
     
     def stop_threads(self):
+        """Stop all running threads.
+        """
         self.do_stop = True
         self.move_thread.join()
         self.decision_making_thread.join()
-        

@@ -29,8 +29,8 @@ def calculate_initial_positions(image):
     Returns:
         numpy.ndarray: Array of positions.
     """
-    number_in_x = 5
-    number_in_y = 4
+    number_in_x = 6
+    number_in_y = 5
 
     initial_padding = [image.shape[1] - constants.AGENT_SIZE[0], image.shape[0] - constants.AGENT_SIZE[1]]
 
@@ -86,6 +86,8 @@ def experiment(trial, image_code):
     else:
         test_image = cv2.imread(IMAGE_DIR + image_code + '.png')
         test_image_name = image_code 
+    
+    number_of_different_opinions = []
 
     print(f'TRIAL: {trial + 1}, SELECTED IMAGE: {test_image_name}')
 
@@ -111,15 +113,18 @@ def experiment(trial, image_code):
 
         if check_for_consenus(decisions, agents) or elapsed_time > constants.MAX_EXPERIMENT_TIME:
             consensus_times.append(elapsed_time)
+            max_opinions = []
             for agent in agents:
+                max_opinions.append(agent.max_opinions)
                 agent.stop_threads()
 
             decision = utils.convert_decision_to_subimage_name(decisions[0], IMAGE_DIR) if elapsed_time < constants.MAX_EXPERIMENT_TIME else 'NO DECISION'
+            number_of_different_opinions = utils.get_number_of_different_opinions(max_opinions)
 
             print(f'FINAL DECISION: {decision}, ELAPSED TIME: {elapsed_time}')
 
             cv2.destroyAllWindows()
-            return test_image_name, decision, elapsed_time
+            return test_image_name, decision, elapsed_time, number_of_different_opinions
 
         # cv2.imshow(f'{test_image_name}', image_copy)
         # cv2.waitKey(1)
@@ -134,8 +139,8 @@ def main(image_code, results_filename):
         image_code (string): Name of the original image or 'r' for randomly selected image.
     """
     for trial in range(NUMBER_OF_TRIALS):
-        image, decision, elapsed_time = experiment(trial, image_code)
-        data_to_write = [image, decision, elapsed_time]
+        image, decision, elapsed_time, number_of_different_opinions = experiment(trial, image_code)
+        data_to_write = [image, decision, elapsed_time, number_of_different_opinions]
         utils.write_results_to_csv(results_filename, data_to_write)
 
 if __name__ == "__main__":

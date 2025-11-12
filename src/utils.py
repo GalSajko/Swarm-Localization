@@ -117,6 +117,8 @@ def print_results(accuracy, elapsed_time):
 def write_results_to_csv(filename, data_to_write):
     with open(filename, 'a', newline = '', encoding = 'utf-8') as f:
         writer = csv.writer(f)
+        data_to_write = [item for sublist in data_to_write for item in (sublist if isinstance(sublist, list) else [sublist])]
+        print(data_to_write)
         writer.writerow(data_to_write)
         f.close()
 
@@ -145,3 +147,16 @@ def select_random_image(image_dir):
     random_image = cv2.imread(os.path.join(image_dir, random_image_name))
 
     return random_image, random_image_name[:-4]
+
+def get_number_of_different_opinions(all_max_opinions):
+    max_length = max([len(max_opinions) for max_opinions in all_max_opinions])
+    
+    number_of_different_opinions = []
+    for i in range(max_length):
+        opinions_at_time_step = set()
+        for max_opinions in all_max_opinions:
+            if i < len(max_opinions):
+                opinions_at_time_step.add(max_opinions[i])
+        number_of_different_opinions.append(len(opinions_at_time_step))
+    
+    return number_of_different_opinions
