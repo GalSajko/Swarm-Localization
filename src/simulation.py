@@ -29,8 +29,8 @@ def calculate_initial_positions(image):
     Returns:
         numpy.ndarray: Array of positions.
     """
-    number_in_x = 6
-    number_in_y = 5
+    number_in_x = 3
+    number_in_y = 3
 
     initial_padding = [image.shape[1] - constants.AGENT_SIZE[0], image.shape[0] - constants.AGENT_SIZE[1]]
 
@@ -126,8 +126,8 @@ def experiment(trial, image_code):
             cv2.destroyAllWindows()
             return test_image_name, decision, elapsed_time, number_of_different_opinions
 
-        # cv2.imshow(f'{test_image_name}', image_copy)
-        # cv2.waitKey(1)
+        cv2.imshow(f'{test_image_name}', image_copy)
+        cv2.waitKey(1)
 
         elapsed_time = time.time() - start_time
         time.sleep(0.01)

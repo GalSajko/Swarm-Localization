@@ -3,7 +3,7 @@ import cv2
 
 SIFT_EXCTRACTOR = cv2.SIFT_create()
 
-NUMBER_OF_AGENTS = 30
+NUMBER_OF_AGENTS = 9
 
 AGENT_SIZE = np.array([94, 53])
 # AGENT_SIZE = np.array([70, 50])
