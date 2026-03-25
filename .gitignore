@@ -124,6 +124,7 @@ celerybeat.pid
 # Environments
 .env
 .venv
+swarm_loc_venv/
 env/
 venv/
 ENV/
@@ -162,6 +163,7 @@ cython_debug/
 #.idea/
 
 *.csv
+.DS_Store
 
 /data/
 /results/
