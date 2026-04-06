@@ -11,10 +11,13 @@ import constants
 import image_augmentation as ia
 import utils
 
-NUMBER_OF_TRIALS = 100
+NUMBER_OF_TRIALS = 20
 IMAGE_DIR = "data/subimages/"
 CENTROIDS_PATH = "codebooks/trained_centroids.npy"
 CODEBOOK_PATH = "codebooks/vlad_vectors.npy"
+
+AGENT_COLOR_NO_DECISION = (0, 0, 255)
+AGENT_COLOR_DECISION = (0, 255, 0)
 
 consensus_times = []
 final_decisions = []
@@ -45,19 +48,18 @@ def calculate_initial_positions(image):
     
     return np.asarray(positions)
 
-def visualize_agent(position, image, color):
+def visualize_agent(agent, image):
     """Visualize agent on the image.
 
     Args:
         position (numpy.ndarray): Agent's position.
         image (numpy.ndarray): Copy of the original image.
-        color (tuple): RGB color, representing agent's current opinion.
     """
+    position = agent.get_position()
     start_point = np.array(position - constants.AGENT_SIZE / 2).astype(np.int32)
     end_point = np.array(position + constants.AGENT_SIZE / 2).astype(np.int32)
 
-    if color:
-        color = tuple(reversed(color))
+    color = AGENT_COLOR_NO_DECISION if agent.get_decision() is None else AGENT_COLOR_DECISION
     cv2.rectangle(image, start_point, end_point, color, 5)
     # cv2.circle(image, position.astype(np.int32), constants.COMMUNICATION_RANGE, (255, 255, 0), 2)
 
@@ -65,7 +67,7 @@ def check_for_consenus(decisions, agents):
     """Check if agents have reached a consensus.
 
     Args:
-        opinions (list): List of all agents opinions.
+        decisions (list): List of all agents decisions.
         agents (list): List of all agents.
 
     Returns:
@@ -75,7 +77,7 @@ def check_for_consenus(decisions, agents):
         return False
     return decisions.count(decisions[0]) == len(decisions)
 
-def experiment(trial, image_code):
+def experiment(trial, image_code, dm_method):
     """Single run of the experiment.
 
     Args:
@@ -95,21 +97,26 @@ def experiment(trial, image_code):
     codebook = np.load(CODEBOOK_PATH)
 
     positions = calculate_initial_positions(test_image)
-    agents = [Agent(test_image, centroids, codebook, positions[i], str(i)) for i in range(len(positions))]
+    agents = [Agent(test_image, centroids, codebook, positions[i], str(i), dm_method) for i in range(len(positions))]
 
     start_time = time.time()
     elapsed_time = 0
 
+    previous_decisions = [-1] * len(agents)
     while True:
         image_copy = np.copy(test_image)
 
         decisions = []
         for agent in agents:
-            visualize_agent(agent.get_position(), image_copy, (255, 0, 0))
+            visualize_agent(agent, image_copy)
             if agent.get_state() == constants.RECEIVING_STATE:
                 agent.collect_opinions(agents)
             
-            decisions.append(agent.calculate_decision())
+            decisions.append(agent.get_decision())
+        
+        # if decisions != previous_decisions:
+        #     print(decisions)
+        # previous_decisions = decisions.copy()
 
         if check_for_consenus(decisions, agents) or elapsed_time > constants.MAX_EXPERIMENT_TIME:
             consensus_times.append(elapsed_time)
@@ -132,21 +139,26 @@ def experiment(trial, image_code):
         elapsed_time = time.time() - start_time
         time.sleep(0.01)
 
-def main(image_code, results_filename):
+def main(image_code, results_filename, dm_method):
     """Main experiment entry.
 
     Args:
         image_code (string): Name of the original image or 'r' for randomly selected image.
     """
     for trial in range(NUMBER_OF_TRIALS):
-        image, decision, elapsed_time, number_of_different_opinions = experiment(trial, image_code)
-        data_to_write = [image, decision, elapsed_time, number_of_different_opinions]
+        image, decision, elapsed_time, number_of_different_opinions = experiment(trial, image_code, dm_method)
+        data_to_write = [image, decision, elapsed_time, dm_method, number_of_different_opinions]
         utils.write_results_to_csv(results_filename, data_to_write)
 
 if __name__ == "__main__":
     image_code = sys.argv[1]
     results_filename = sys.argv[2]
+    dm_method = sys.argv[3]
 
-    main(image_code, results_filename)
+    if dm_method not in (constants.ASODM_METHOD, constants.DEMPSER_SHAFER_METHOD):
+        print(f'Invalid decision making method: {dm_method}. Please choose either "{constants.ASODM_METHOD}" or "{constants.DEMPSER_SHAFER_METHOD}".')
+        sys.exit(1)
+
+    main(image_code, results_filename, dm_method)
 
     

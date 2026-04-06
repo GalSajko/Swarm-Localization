@@ -118,7 +118,6 @@ def write_results_to_csv(filename, data_to_write):
     with open(filename, 'a', newline = '', encoding = 'utf-8') as f:
         writer = csv.writer(f)
         data_to_write = [item for sublist in data_to_write for item in (sublist if isinstance(sublist, list) else [sublist])]
-        print(data_to_write)
         writer.writerow(data_to_write)
         f.close()
 

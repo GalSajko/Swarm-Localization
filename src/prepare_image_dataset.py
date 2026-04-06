@@ -123,14 +123,14 @@ def root_sift_visual_features(list_of_images):
     Returns:
         tuple[list, list]: Keypoints and descriptors.
     """
-    sift_extractor = constants.SIFT_EXCTRACTOR
+    sift_extractor = constants.SIFT_EXTRACTOR
     keypoints = []
     descriptors = []
 
     for image in list_of_images:
         img_keypoints, img_descriptors = sift_extractor.detectAndCompute(image, None)
         if img_descriptors is None:
-            img_descriptors = np.empty((constants.SIFT_EXCTRACTOR.descriptorSize(), 128), dtype = np.float32)
+            img_descriptors = np.empty((constants.SIFT_EXTRACTOR.descriptorSize(), 128), dtype = np.float32)
         root_sift_descriptors = utils.root_sift(img_descriptors)
         keypoints.append(img_keypoints)
         descriptors.append(root_sift_descriptors)

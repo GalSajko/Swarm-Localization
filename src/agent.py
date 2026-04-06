@@ -14,8 +14,9 @@ import image_augmentation as ia
 import utils
 
 class Agent:
-    def __init__(self, original_image, centroids, codebook, start_position, id):
+    def __init__(self, original_image, centroids, codebook, start_position, id, dm_method):
         self.id = id 
+        self.dm_method = dm_method
 
         self.do_stop = False
 
@@ -26,23 +27,28 @@ class Agent:
         self.codebook = codebook
         self.descriptors = []
 
-        self.sift_extractor = constants.SIFT_EXCTRACTOR
+        self.sift_extractor = constants.SIFT_EXTRACTOR
         self.original_image = original_image
 
         self.state = constants.EXPLORATION_STATE
         self.state_locker = threading.Lock()
         self.exploration_state_counter = 0
 
+        # Variables for keeping data used in decision making applicable to both methods.
+        self.social_information = {} if self.dm_method == constants.ASODM_METHOD else []
+        self.opinions = np.zeros(len(self.codebook)) if self.dm_method == constants.ASODM_METHOD else {}
+
+        # aSODM variables
         self.personal_information = np.zeros(len(self.codebook))
         self.personal_information_locker = threading.Lock()
-        self.social_information_dict = {}
-        self.opinions = np.zeros(len(self.codebook))
+        self.social_factor = 2.0
+        self.decision_threshold = np.ones_like(self.opinions) * constants.INITIAL_DECISION_THRESHOLD if self.dm_method == constants.ASODM_METHOD else 0.9
+
+        if self.dm_method == constants.DEMPSER_SHAFER_METHOD:
+            self.theta_set = set(range(len(self.codebook)))
 
         # For results only
         self.max_opinions = []
-
-        self.social_factor = 2.0
-        self.decision_threshold = np.ones_like(self.opinions) * constants.INITIAL_DECISION_THRESHOLD
 
         # Opinion is defined as name of the subimage.
         self.decision = None
@@ -90,6 +96,15 @@ class Agent:
             self.personal_information = value
     
     def calculate_decision(self):
+        """Get current decision in a thread-safe way.
+
+        Returns:
+            string: Current decision.
+        """
+        with self.decision_locker:
+            return self.decision
+    
+    def get_decision(self):
         """Get current decision in a thread-safe way.
 
         Returns:
@@ -210,7 +225,12 @@ class Agent:
                 if len(self.descriptors) >= descriptor_buffer_length:
                     self.calculate_vlad_vector()
                     cosine_similarity = utils.evaluate_similarity(self.vlad_vectors, self.codebook)
-                    personal_information = dm.calculate_personal_information(cosine_similarity)
+
+                    if self.dm_method == constants.ASODM_METHOD:
+                        personal_information = dm.calculate_personal_information(cosine_similarity)
+                    elif self.dm_method == constants.DEMPSER_SHAFER_METHOD:
+                        personal_information = utils.softmax_over_vector(cosine_similarity)
+                    
                     self.set_personal_information(personal_information)
                     self.descriptors = []
                 
@@ -268,7 +288,7 @@ class Agent:
             while not self.do_stop:
                 # Receive social information. Method for collecting social information is called from the simulation module, because it needs access to other Agents objects. 
                 # Here we only set state and reset social information buffer.
-                self.social_information_dict = {}
+                self.social_information = {} if self.dm_method == constants.ASODM_METHOD else []
                 self.set_state(constants.RECEIVING_STATE)
                 start_time = time.time()
                 elapsed_time = 0
@@ -281,11 +301,12 @@ class Agent:
                 # Decision making, based on personal and social information
                 self.set_state(constants.DECISION_MAKING_STATE)
                 
-                received_opinions = np.array(list(self.social_information_dict.values()))
-                new_opinion = dm.asodm(self.get_personal_information(), self.social_factor, received_opinions, len(self.codebook), self.decision_threshold)
-                self.opinions += new_opinion
-
-                # self.update_decision_threshold(received_opinions)
+                if self.dm_method == constants.ASODM_METHOD:
+                    received_opinions = np.array(list(self.social_information.values()))
+                    new_opinion = dm.asodm(self.get_personal_information(), self.social_factor, received_opinions, len(self.codebook), self.decision_threshold)
+                    self.opinions += new_opinion
+                elif self.dm_method == constants.DEMPSER_SHAFER_METHOD:
+                    self.opinions = dm.dempster_shafer(self.get_personal_information(), self.opinions, self.social_information, self.theta_set)
 
                 self.set_decision(self.calculate_decision())
 
@@ -323,7 +344,10 @@ class Agent:
                 if agent.get_state() == constants.DISSEMINATION_STATE:
                     agent_information = agent.opinions
                     if len(agent_information):
-                        self.social_information_dict[agent.id] = agent_information 
+                        if self.dm_method == constants.ASODM_METHOD:
+                            self.social_information[agent.id] = agent_information 
+                        elif self.dm_method == constants.DEMPSER_SHAFER_METHOD:
+                            self.social_information.append(agent_information)
     
     def calculate_decision(self):
         """Calculate current decision based on opinions.
@@ -331,8 +355,22 @@ class Agent:
         Returns:
             int: Id of the decided subimage or None if no decision has been made yet.
         """
-        if np.max(self.opinions) >= self.decision_threshold[np.argmax(self.opinions)]:
-            return np.argmax(self.opinions)
+        if self.dm_method == constants.ASODM_METHOD:
+            if np.max(self.opinions) >= self.decision_threshold[np.argmax(self.opinions)]:
+                return np.argmax(self.opinions)
+            return None
+        elif self.dm_method == constants.DEMPSER_SHAFER_METHOD:
+            max_belief = -1
+            best_singleton = None
+            for hyp, belief in self.opinions.items():
+                if len(hyp) == 1 and belief > max_belief:
+                    max_belief = belief
+                    best_singleton = hyp
+            if best_singleton is not None:
+                if max_belief > self.decision_threshold:
+                    return list(best_singleton)[0]
+            return None
+
         return None
     
     def update_decision_threshold(self, received_opinions):
@@ -357,10 +395,16 @@ class Agent:
         Returns:
             float: Dissemination time in seconds.
         """
-        decision_threshold = self.decision_threshold[np.argmax(self.opinions)]
-        dissemination_time = constants.MAX_DISSEMINATION_TIME * np.max(self.opinions) / decision_threshold
-        if dissemination_time > constants.MAX_DISSEMINATION_TIME:
-            dissemination_time = constants.MAX_DISSEMINATION_TIME
+        if self.dm_method == constants.ASODM_METHOD:
+            decision_threshold = self.decision_threshold[np.argmax(self.opinions)]
+            dissemination_time = constants.MAX_DISSEMINATION_TIME * np.max(self.opinions) / decision_threshold
+            if dissemination_time > constants.MAX_DISSEMINATION_TIME:
+                dissemination_time = constants.MAX_DISSEMINATION_TIME
+        elif self.dm_method == constants.DEMPSER_SHAFER_METHOD:
+            if not self.opinions:
+                return constants.MAX_DISSEMINATION_TIME
+            max_belief = max(self.opinions.values())
+            dissemination_time = constants.MAX_DISSEMINATION_TIME * max_belief
 
         return dissemination_time
     
