@@ -19,6 +19,14 @@ ORIGINAL_IMAGES_DIR = 'data/original_images/'
 SUBIMAGES_DIR = 'data/subimages/'
 COLORED_SATELITE_IMAGE_NAME = 'colored_satelite_image.png'
 BW_SATELITE_IMAGE_NAME = 'bw_satelite_image.png'
+SUBIMAGE_GRID_SIZE = (20, 20)
+
+TERRAIN_IMAGE_NAMES = {
+    'city': 'city_bw.png',
+    'desert': 'desert_bw.png',
+    'mountains': 'mountains_bw.png',
+    'rural': 'rural_bw.png',
+}
 
 TRAINING_DATASET = 'training_data/ims_gray.npy'
 
@@ -41,16 +49,19 @@ def convert_image_to_bw_and_save(original_image_path, original_image_name, path_
     
     cv2.imwrite(path_to_save + BW_SATELITE_IMAGE_NAME, bw_image)
 
-def divide_image_on_subimages_and_save(image, divide_on, remove_old_files = True):
+def divide_image_on_subimages_and_save(image, divide_on, subimages_dir = SUBIMAGES_DIR, remove_old_files = True):
     """Divide original image on desired number of subimages and save them in subimages directory.
 
     Args:
         image (numpy.ndarray): Original image as numpy array.
         divide_on (tuple[int, int]): Number of subimages in horizontal and vertical direction.
+        subimages_dir (string): Directory where subimages will be stored.
         remove_old_files(bool, optional): If True, remove previous image files in the directory. Defaults to True.
     """
+    os.makedirs(subimages_dir, exist_ok = True)
+
     if remove_old_files:
-        remove_files_from_dir(SUBIMAGES_DIR)
+        remove_files_from_dir(subimages_dir)
 
     shape = image.shape
     
@@ -62,7 +73,7 @@ def divide_image_on_subimages_and_save(image, divide_on, remove_old_files = True
             sub_image = image[y * subimage_y_size : (y + 1) * subimage_y_size, x * subimage_x_size : (x + 1) * subimage_x_size]
             first_index = x + 1 if x + 1 >= 10 else '0' + str(x + 1)
             second_index = y + 1 if y + 1 >= 10 else '0' + str(y + 1)
-            cv2.imwrite(SUBIMAGES_DIR + f"{first_index}_{second_index}.png", sub_image)
+            cv2.imwrite(os.path.join(subimages_dir, f"{first_index}_{second_index}.png"), sub_image)
 
 def get_dict_of_dataset_images(dir):
     """Save images and their names in dictionary.
@@ -93,9 +104,11 @@ def remove_files_from_dir(dir):
     Args:
         dir (string): Directory.
     """
-    files = glob.glob(dir + '*')
+    files = glob.glob(os.path.join(dir, '*'))
     for file in files:
         if os.path.basename(file) == '.gitkeep':
+            continue
+        if os.path.isdir(file):
             continue
         os.remove(file)
 
@@ -286,34 +299,36 @@ def prepare_and_save_vlad_codebook(training_set, testing_set, training = False):
     np.save(VLAD_VECTORS_NPY, vlad_vectors)
 #endregion
 
-def create_similarity_json(codebook, testing_set):
-    """Create JSON file with filenames of 5 most similar images for each image in the dataset.
+def get_terrain_subimages_dir(terrain_name):
+    return os.path.join(SUBIMAGES_DIR, terrain_name)
 
-    Args:
-        codebook (numpy.ndarray): Codebook of visual words.
-        testing_set (dict): Dictionary of images in the dataset.
-    """
-    filenames = list(testing_set.keys())
-    similarity_dict = {}
-    for i, filename in enumerate(filenames):
-        similarity_vector = utils.evaluate_similarity(codebook[i], codebook)
-        ten_best_indices = list(np.argsort(similarity_vector)[::-1][1:51])
-        ten_best_filenames = [filenames[index] for index in ten_best_indices]
-        similarity_dict[filename] = {fn : float(similarity_vector[ten_best_indices[i]]) for i, fn in enumerate(ten_best_filenames)}
+def get_terrain_vlad_vectors_path(terrain_name):
+    return os.path.join('codebooks', f'vlad_vectors_{terrain_name}.npy')
 
-    with open('data/similarity_table.json', 'w') as f:
-        json.dump(similarity_dict, f, indent = 4)
+def prepare_terrain_subimages_and_codebooks():
+    """Prepare terrain-specific subimages and VLAD vectors using existing trained centroids."""
+    centroids = np.load(TRAINED_CENTROIDS_NPY)
+
+    for terrain_name, image_name in TERRAIN_IMAGE_NAMES.items():
+        image_path = os.path.join(ORIGINAL_IMAGES_DIR, image_name)
+        image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+        if image is None:
+            print(f"Skipping terrain '{terrain_name}', image not found: {image_path}")
+            continue
+
+        terrain_subimages_dir = get_terrain_subimages_dir(terrain_name)
+        divide_image_on_subimages_and_save(image, SUBIMAGE_GRID_SIZE, terrain_subimages_dir, True)
+
+        testing_set = get_dict_of_dataset_images(terrain_subimages_dir + os.sep)
+        _, descriptors = root_sift_visual_features(list(testing_set.values()))
+        mapped_descriptors = map_descriptors_to_centroids(descriptors, centroids)
+        vlad_vectors = calculate_vlad_vectors(descriptors, mapped_descriptors, centroids)
+
+        np.save(get_terrain_vlad_vectors_path(terrain_name), vlad_vectors)
 
 if __name__ == '__main__':
     if is_correct_dir():
-        # divide_image_on_subimages_and_save(cv2.imread(ORIGINAL_IMAGES_DIR + BW_SATELITE_IMAGE_NAME, cv2.IMREAD_GRAYSCALE), (20, 20), True)
-
-        training_set = np.load(TRAINING_DATASET)
-        testing_set = get_dict_of_dataset_images(SUBIMAGES_DIR)
-
-        create_similarity_json(np.load(VLAD_VECTORS_NPY), testing_set)
-
-        # prepare_and_save_vlad_codebook(training_set, testing_set, True)
+        prepare_terrain_subimages_and_codebooks()
 
     else:
         print(f"Call script from project's root directory: {PROJECT_ROOT_DIR}")

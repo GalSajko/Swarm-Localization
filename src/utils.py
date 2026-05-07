@@ -65,7 +65,8 @@ def sleep_with_adjustable_period(loop_period, start_time):
         max_period (float): Desired loop period.
         start_time (float): Time at which the loop begun.
     """
-    if sleep_time := loop_period - (time.time() - start_time) >= 0:
+    sleep_time = loop_period - (time.time() - start_time)
+    if sleep_time >= 0:
         time.sleep(sleep_time)
         return
     

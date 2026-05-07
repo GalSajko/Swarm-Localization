@@ -36,7 +36,7 @@ def calculate_asodm_parameters(all_opinions, no_of_choices, decision_threshold):
     Args:
         all_opinions (numpy.ndarray): Array of all collected opinions.
         no_of_choices (int): Number of different options.
-        decision_threshold (numpy.ndarray): Decsision threshold vector.
+        decision_threshold (numpy.ndarray): Decision threshold vector.
 
     Returns:
         (numpy.ndarray, numpy.ndarray): Deltas and betas.
@@ -95,7 +95,7 @@ def dempster_shafer(personal_information, mass_dict, social_masses, theta_set):
     Returns:
         numpy.ndarray: Combined belief.
     """
-    k = 5
+    k = 10
     gamma = 0.5
 
     # Ensure Theta has the same immutable set structure as all other focal sets.
