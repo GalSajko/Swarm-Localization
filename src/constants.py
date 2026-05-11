@@ -3,7 +3,7 @@ import cv2
 
 SIFT_EXTRACTOR = cv2.SIFT_create()
 
-NUMBER_OF_AGENTS = 6
+NUMBER_OF_AGENTS = 9
 
 # Height 100 m, 82 deg diagonal FOV, 4:3 aspect ratio.
 AGENT_SIZE = np.array([79, 63])
