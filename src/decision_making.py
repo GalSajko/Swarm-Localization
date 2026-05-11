@@ -96,7 +96,7 @@ def dempster_shafer(personal_information, mass_dict, social_masses, theta_set):
         numpy.ndarray: Combined belief.
     """
     k = 10
-    gamma = 0.5
+    gamma = 0.9
 
     # Ensure Theta has the same immutable set structure as all other focal sets.
     if len(theta_set) != len(personal_information):
