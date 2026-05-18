@@ -1,10 +1,6 @@
-from collections import Counter
 import cv2
-import matplotlib.pyplot as plt
 import numpy as np
-import random
 from scipy.cluster.vq import vq
-import sys
 import threading
 import time
 
@@ -14,11 +10,22 @@ import image_augmentation as ia
 import utils
 
 class Agent:
-    def __init__(self, original_image, centroids, codebook, start_position, id, dm_method, speed_up_factor, movement_type = constants.RANDOM_MOVEMENT, search_bounds = None):
+    def __init__(
+        self,
+        original_image,
+        centroids,
+        codebook,
+        start_position,
+        id,
+        speed_up_factor,
+        search_bounds = None,
+        use_fixed_threshold = False,
+        use_yager_social_fusion = False,
+        threshold_value = None,
+        trial_start_time = None,
+    ):
         self.id = id 
-        self.dm_method = dm_method
         self.speed_up_factor = speed_up_factor
-        self.movement_type = movement_type
         self.search_bounds = search_bounds
 
         self.do_stop = False
@@ -45,24 +52,32 @@ class Agent:
         self.velocity_gain = 0.085 * self.speed_up_factor
         self.receiving_time = constants.RECEIVING_TIME / self.speed_up_factor
         self.max_dissemination_time = constants.MAX_DISSEMINATION_TIME / self.speed_up_factor
+        self.min_dissemination_time = constants.MIN_DISSEMINATION_TIME / self.speed_up_factor
         self.movement_period = 0.01
         self.state_polling_period = 0.1 / self.speed_up_factor
+        self.initial_spawn_pause = 0.0
+        self.startup_release_time = time.time() + self.initial_spawn_pause
+        self.trial_start_time = time.time() if trial_start_time is None else trial_start_time
 
-        # Variables for keeping data used in decision making applicable to both methods.
-        self.social_information = {} if self.dm_method == constants.ASODM_METHOD else []
-        self.opinions = np.zeros(len(self.codebook)) if self.dm_method == constants.ASODM_METHOD else {}
-
-        # aSODM variables
+        self.social_information = []
+        self.social_thresholds = []
+        self.opinions = {}
+        self.ds_scores = np.zeros(len(self.codebook), dtype = np.float32)
         self.personal_information = np.zeros(len(self.codebook))
         self.personal_information_locker = threading.Lock()
-        self.social_factor = 2.0
-        self.decision_threshold = np.ones_like(self.opinions) * constants.ASODM_DECISION_THRESHOLD if self.dm_method == constants.ASODM_METHOD else constants.DS_DECISION_THRESHOLD
-
-        if self.dm_method == constants.DEMPSER_SHAFER_METHOD:
-            self.theta_set = set(range(len(self.codebook)))
+        self.decision_threshold = constants.DS_DECISION_THRESHOLD if threshold_value is None else float(threshold_value)
+        self.use_fixed_threshold = use_fixed_threshold
+        self.use_yager_social_fusion = use_yager_social_fusion
+        self.dynamic_threshold = self.decision_threshold
+        self.threshold_locker = threading.Lock()
+        self.theta_set = set(range(len(self.codebook)))
 
         # For results only
         self.max_opinions = []
+        self.decision_cycle_index = 0
+        self.first_decision_time = None
+        self.first_decision_cycle = None
+        self.decision_dynamics = []
 
         # Opinion is defined as name of the subimage.
         self.decision = None
@@ -77,7 +92,7 @@ class Agent:
         self.current_lane_coord = None
         self.target_lane_coord = None
         self.border_anchor = None
-        self.target_corner = self.calculate_closest_cell_corner() if self.movement_type == constants.GRID_SEARCH_MOVEMENT else None
+        self.target_corner = self.calculate_closest_cell_corner()
 
         self.move_thread = self.move_in_thread()
         self.decision_making_thread = self.start_decision_making_thread()
@@ -186,17 +201,6 @@ class Agent:
         
         return photo
     
-    def calculate_random_velocity(self):
-        """Calculate random velocity for the agent.
-
-        Returns:
-            numpy.ndarray: Velocity vector in x and y directions.
-        """
-        x = np.random.uniform(low = -1.0, high = 1.0)
-        y = np.random.choice([-1, 1]) * np.sqrt(1.0 - x**2)
-
-        return np.array([x, y], dtype = np.float32) * self.velocity_gain
-
     def get_cell_traversable_bounds(self):
         """Return center-position bounds that keep the agent inside its assigned cell.
 
@@ -307,6 +311,22 @@ class Agent:
                 loop_start_time,
             )
 
+    def wait_for_startup_release(self):
+        """Block all agent activity until the initial spawn pause has elapsed."""
+        while not self.do_stop:
+            remaining_time = self.startup_release_time - time.time()
+            if remaining_time <= 0:
+                return
+            loop_start_time = time.time()
+            utils.sleep_with_adjustable_period(
+                min(self.state_polling_period, remaining_time),
+                loop_start_time,
+            )
+
+    def get_elapsed_simulation_time(self):
+        """Return elapsed trial time rescaled to simulation seconds."""
+        return (time.time() - self.trial_start_time) * self.speed_up_factor
+
     def update_grid_search_position(self):
         """Update position using cell-entry and lawnmower grid-search movement."""
         current_position = self.get_position()
@@ -381,27 +401,10 @@ class Agent:
         """Agent movement in separate thread.
         """
         def move():
-            velocity = self.calculate_random_velocity()
-            start_time, final_time = utils.set_timer(5.0 / self.speed_up_factor, 20.0 / self.speed_up_factor)
-
+            self.wait_for_startup_release()
             while True:
                 loop_start_time = time.time()
-                current_position = self.get_position()
-
-                if self.movement_type == constants.GRID_SEARCH_MOVEMENT:
-                    self.update_grid_search_position()
-                else:
-                    if self.position[0] + constants.AGENT_SIZE[0] / 2 >= self.original_image.shape[1] or self.position[0] - constants.AGENT_SIZE[0] <= 0:
-                        velocity[0] *= -1
-                    if self.position[1] + constants.AGENT_SIZE[1] / 2 >= self.original_image.shape[0] or self.position[1] - constants.AGENT_SIZE[1] <= 1:
-                        velocity[1] *= -1
-
-                    elapsed_time = time.time() - start_time
-                    if elapsed_time > final_time:
-                        start_time, final_time = utils.set_timer(5.0 / self.speed_up_factor, 20.0 / self.speed_up_factor)
-                        velocity = self.calculate_random_velocity()
-                    
-                    self.set_position(current_position + velocity)
+                self.update_grid_search_position()
 
                 if self.do_stop:
                     return 
@@ -422,6 +425,7 @@ class Agent:
         def exploration():
             """Take photos and calculate sift descriptors.
             """
+            self.wait_for_startup_release()
             descriptor_buffer_length = 1
             while not self.do_stop:
                 loop_start_time = time.time()
@@ -431,12 +435,7 @@ class Agent:
                 if len(self.descriptors) >= descriptor_buffer_length:
                     self.calculate_vlad_vector()
                     cosine_similarity = utils.evaluate_similarity(self.vlad_vectors, self.codebook)
-
-                    if self.dm_method == constants.ASODM_METHOD:
-                        personal_information = dm.calculate_personal_information(cosine_similarity)
-                    elif self.dm_method == constants.DEMPSER_SHAFER_METHOD:
-                        personal_information = utils.softmax_over_vector(cosine_similarity)
-                    
+                    personal_information = utils.softmax_over_vector(cosine_similarity)
                     self.set_personal_information(personal_information)
                     self.descriptors = []
                 
@@ -485,30 +484,38 @@ class Agent:
         norms = np.linalg.norm(self.vlad_vectors, axis = 1)
         mask = norms > eps
         self.vlad_vectors[mask] /= norms[mask, None]
-        
+
     def start_decision_making_thread(self):
         """Thread for updating agent's opinion, based on private and social information.
         """
         def decision_making_in_loop():
+            self.wait_for_startup_release()
             exploration_thread = self.start_exploration_thread()
             while not self.do_stop:
                 # Receive social information. Method for collecting social information is called from the simulation module, because it needs access to other Agents objects. 
                 # Here we only set state and reset social information buffer.
-                self.social_information = {} if self.dm_method == constants.ASODM_METHOD else []
+                self.social_information = []
+                self.social_thresholds = []
                 self.set_state(constants.RECEIVING_STATE)
                 self.wait_for_scaled_duration(self.receiving_time)
 
                 # Decision making, based on personal and social information
                 self.set_state(constants.DECISION_MAKING_STATE)
-                
-                if self.dm_method == constants.ASODM_METHOD:
-                    received_opinions = np.array(list(self.social_information.values()))
-                    new_opinion = dm.asodm(self.get_personal_information(), self.social_factor, received_opinions, len(self.codebook), self.decision_threshold)
-                    self.opinions += new_opinion
-                elif self.dm_method == constants.DEMPSER_SHAFER_METHOD:
-                    self.opinions = dm.dempster_shafer(self.get_personal_information(), self.opinions, self.social_information, self.theta_set)
 
-                self.set_decision(self.calculate_decision())
+                self.opinions, self.ds_scores = dm.dempster_shafer(
+                    self.get_personal_information(),
+                    self.opinions,
+                    self.social_information,
+                    self.theta_set,
+                    self.id,
+                    self.use_yager_social_fusion,
+                )
+                if not self.use_fixed_threshold:
+                    self.update_dynamic_threshold()
+
+                current_decision = self.calculate_decision()
+                self.set_decision(current_decision)
+                self.record_decision_cycle(current_decision)
 
                 # Disseminate 
                 self.set_state(constants.DISSEMINATION_STATE)
@@ -516,7 +523,7 @@ class Agent:
                 self.wait_for_scaled_duration(dissemination_time)
 
                 # For results only
-                self.max_opinions.append(np.argmax(self.opinions))
+                self.max_opinions.append(int(np.argmax(self.ds_scores)))
 
             exploration_thread.join()
 
@@ -538,10 +545,9 @@ class Agent:
                 if agent.get_state() == constants.DISSEMINATION_STATE:
                     agent_information = agent.opinions
                     if len(agent_information):
-                        if self.dm_method == constants.ASODM_METHOD:
-                            self.social_information[agent.id] = agent_information 
-                        elif self.dm_method == constants.DEMPSER_SHAFER_METHOD:
-                            self.social_information.append(agent_information)
+                        self.social_information.append(agent_information)
+                    if not self.use_fixed_threshold:
+                        self.social_thresholds.append(agent.get_dynamic_threshold())
     
     def calculate_decision(self):
         """Calculate current decision based on opinions.
@@ -549,23 +555,117 @@ class Agent:
         Returns:
             int: Id of the decided subimage or None if no decision has been made yet.
         """
-        if self.dm_method == constants.ASODM_METHOD:
-            if np.max(self.opinions) >= self.decision_threshold[np.argmax(self.opinions)]:
-                return np.argmax(self.opinions)
+        best_hypothesis, best_decision_score = self.get_best_decision_score()
+        if best_hypothesis is None:
             return None
-        elif self.dm_method == constants.DEMPSER_SHAFER_METHOD:
-            max_belief = -1
-            best_singleton = None
-            for hyp, belief in self.opinions.items():
-                if len(hyp) == 1 and belief > max_belief:
-                    max_belief = belief
-                    best_singleton = hyp
-            if best_singleton is not None:
-                if max_belief > self.decision_threshold:
-                    return list(best_singleton)[0]
-            return None
+        threshold = self.decision_threshold if self.use_fixed_threshold else self.get_dynamic_threshold()
+        if best_decision_score >= threshold:
+            return best_hypothesis
 
         return None
+
+    def get_current_threshold(self):
+        """Return the active threshold used for the current decision rule."""
+        return self.decision_threshold if self.use_fixed_threshold else self.get_dynamic_threshold()
+
+    def get_best_decision_score(self):
+        """Return the highest-scoring tile according to the current decision scores."""
+        if self.ds_scores is None or not len(self.ds_scores):
+            return None, -1.0
+        best_hypothesis = int(np.argmax(self.ds_scores))
+        return best_hypothesis, float(self.ds_scores[best_hypothesis])
+
+    def get_best_focal_set(self):
+        """Return the highest-mass non-Theta focal set from the current DS mass."""
+        best_focal_set = frozenset()
+        best_mass = -1.0
+        theta_size = len(self.theta_set)
+
+        for focal_set, mass in self.opinions.items():
+            if len(focal_set) == 0 or len(focal_set) == theta_size:
+                continue
+            if mass > best_mass:
+                best_focal_set = focal_set
+                best_mass = float(mass)
+
+        return best_focal_set
+
+    def get_best_focal_set_and_mass(self):
+        """Return the strongest non-Theta focal set and its mass."""
+        best_focal_set = frozenset()
+        best_mass = -1.0
+        theta_size = len(self.theta_set)
+
+        for focal_set, mass in self.opinions.items():
+            if len(focal_set) == 0 or len(focal_set) == theta_size:
+                continue
+            if mass > best_mass:
+                best_focal_set = focal_set
+                best_mass = float(mass)
+
+        return best_focal_set, best_mass
+
+    def record_decision_cycle(self, current_decision):
+        """Store one per-cycle snapshot for later analysis export."""
+        self.decision_cycle_index += 1
+        best_hypothesis, best_decision_score = self.get_best_decision_score()
+        elapsed_time = self.get_elapsed_simulation_time()
+        threshold = self.get_current_threshold()
+
+        if current_decision is not None and self.first_decision_time is None:
+            self.first_decision_time = elapsed_time
+            self.first_decision_cycle = self.decision_cycle_index
+
+        self.decision_dynamics.append(
+            {
+                "cycle_index": self.decision_cycle_index,
+                "elapsed_time": elapsed_time,
+                "best_hypothesis": best_hypothesis,
+                "best_score": best_decision_score,
+                "threshold": threshold,
+                "decision": current_decision,
+            }
+        )
+
+    def get_dynamic_threshold(self):
+        """Get the current decentralized decision threshold."""
+        with self.threshold_locker:
+            return float(self.dynamic_threshold)
+
+    def set_dynamic_threshold(self, value):
+        """Set the current decentralized decision threshold."""
+        with self.threshold_locker:
+            self.dynamic_threshold = float(value)
+
+    def calculate_local_threshold_proposal(self):
+        """Propose a threshold from the latest local decision score."""
+        _, best_decision_score = self.get_best_decision_score()
+        if best_decision_score <= 0:
+            return constants.DS_THRESHOLD_MIN
+
+        proposed_threshold = best_decision_score - constants.DS_THRESHOLD_MARGIN
+        return float(np.clip(proposed_threshold, constants.DS_THRESHOLD_MIN, constants.DS_THRESHOLD_MAX))
+
+    def update_dynamic_threshold(self):
+        """Update the shared threshold by combining a local proposal with neighbor thresholds."""
+        current_threshold = self.get_dynamic_threshold()
+        local_threshold = self.calculate_local_threshold_proposal()
+        anchored_threshold = (
+            (1.0 - constants.DS_THRESHOLD_LOCAL_GAIN) * current_threshold
+            + constants.DS_THRESHOLD_LOCAL_GAIN * local_threshold
+        )
+
+        if self.social_thresholds:
+            consensus_shift = np.mean(
+                [neighbor_threshold - anchored_threshold for neighbor_threshold in self.social_thresholds],
+                dtype = np.float32,
+            )
+            updated_threshold = anchored_threshold + constants.DS_THRESHOLD_CONSENSUS_GAIN * float(consensus_shift)
+        else:
+            updated_threshold = anchored_threshold
+
+        updated_threshold = float(np.clip(updated_threshold, constants.DS_THRESHOLD_MIN, constants.DS_THRESHOLD_MAX))
+        self.set_dynamic_threshold(updated_threshold)
     
     def get_dissemination_time(self):
         """Calculate dissemination time, based on current opinion.
@@ -573,16 +673,14 @@ class Agent:
         Returns:
             float: Dissemination time in seconds.
         """
-        if self.dm_method == constants.ASODM_METHOD:
-            decision_threshold = self.decision_threshold[np.argmax(self.opinions)]
-            dissemination_time = self.max_dissemination_time * np.max(self.opinions) / decision_threshold
-            if dissemination_time > self.max_dissemination_time:
-                dissemination_time = self.max_dissemination_time
-        elif self.dm_method == constants.DEMPSER_SHAFER_METHOD:
-            if not self.opinions:
-                return self.max_dissemination_time
-            max_belief = max(self.opinions.values())
-            dissemination_time = self.max_dissemination_time * max_belief
+        _, best_decision_score = self.get_best_decision_score()
+        if best_decision_score <= 0:
+            return self.min_dissemination_time
+        dissemination_time = self.max_dissemination_time * best_decision_score
+        if dissemination_time > self.max_dissemination_time:
+            dissemination_time = self.max_dissemination_time
+        if dissemination_time < self.min_dissemination_time:
+            dissemination_time = self.min_dissemination_time
 
         return dissemination_time
     
