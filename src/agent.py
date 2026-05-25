@@ -61,6 +61,8 @@ class Agent:
 
         self.social_information = []
         self.social_thresholds = []
+        self.social_decision_flags = []
+        self.received_neighbor_ids = set()
         self.opinions = {}
         self.ds_scores = np.zeros(len(self.codebook), dtype = np.float32)
         self.personal_information = np.zeros(len(self.codebook))
@@ -78,6 +80,7 @@ class Agent:
         self.first_decision_time = None
         self.first_decision_cycle = None
         self.decision_dynamics = []
+        self.best_decision_history = []
 
         # Opinion is defined as name of the subimage.
         self.decision = None
@@ -496,6 +499,8 @@ class Agent:
                 # Here we only set state and reset social information buffer.
                 self.social_information = []
                 self.social_thresholds = []
+                self.social_decision_flags = []
+                self.received_neighbor_ids = set()
                 self.set_state(constants.RECEIVING_STATE)
                 self.wait_for_scaled_duration(self.receiving_time)
 
@@ -516,6 +521,7 @@ class Agent:
                 current_decision = self.calculate_decision()
                 self.set_decision(current_decision)
                 self.record_decision_cycle(current_decision)
+                self.append_best_decision_history()
 
                 # Disseminate 
                 self.set_state(constants.DISSEMINATION_STATE)
@@ -541,6 +547,8 @@ class Agent:
         for agent in agents:
             if agent.id == self.id:
                 continue
+            if agent.id in self.received_neighbor_ids:
+                continue
             if np.linalg.norm(self.get_position() - agent.get_position()) <= constants.COMMUNICATION_RANGE:
                 if agent.get_state() == constants.DISSEMINATION_STATE:
                     agent_information = agent.opinions
@@ -548,6 +556,8 @@ class Agent:
                         self.social_information.append(agent_information)
                     if not self.use_fixed_threshold:
                         self.social_thresholds.append(agent.get_dynamic_threshold())
+                        self.social_decision_flags.append(agent.get_decision() is not None)
+                    self.received_neighbor_ids.add(agent.id)
     
     def calculate_decision(self):
         """Calculate current decision based on opinions.
@@ -611,6 +621,7 @@ class Agent:
         best_hypothesis, best_decision_score = self.get_best_decision_score()
         elapsed_time = self.get_elapsed_simulation_time()
         threshold = self.get_current_threshold()
+        unique_received_opinion_count = len(self.social_information)
 
         if current_decision is not None and self.first_decision_time is None:
             self.first_decision_time = elapsed_time
@@ -623,6 +634,7 @@ class Agent:
                 "best_hypothesis": best_hypothesis,
                 "best_score": best_decision_score,
                 "threshold": threshold,
+                "unique_received_opinion_count": unique_received_opinion_count,
                 "decision": current_decision,
             }
         )
@@ -637,7 +649,7 @@ class Agent:
         with self.threshold_locker:
             self.dynamic_threshold = float(value)
 
-    def calculate_local_threshold_proposal(self):
+    def calculate_confidence_threshold_proposal(self):
         """Propose a threshold from the latest local decision score."""
         _, best_decision_score = self.get_best_decision_score()
         if best_decision_score <= 0:
@@ -646,10 +658,73 @@ class Agent:
         proposed_threshold = best_decision_score - constants.DS_THRESHOLD_MARGIN
         return float(np.clip(proposed_threshold, constants.DS_THRESHOLD_MIN, constants.DS_THRESHOLD_MAX))
 
+    def calculate_decided_neighbor_majority_factor(self):
+        """Return a majority factor based on the fraction of decided neighbors."""
+        if not self.social_decision_flags:
+            return 0.0
+
+        decided_ratio = float(np.mean(self.social_decision_flags, dtype = np.float32))
+        return max(0.0, (decided_ratio - 0.5) / 0.5)
+
+    def calculate_stability_factor(self):
+        """Return a score-stability factor from a sliding window of best decision scores."""
+        best_hypothesis, best_decision_score = self.get_best_decision_score()
+        if best_hypothesis is None or best_decision_score <= 0:
+            return 0.0
+
+        window_size = int(constants.DS_THRESHOLD_SCORE_WINDOW)
+        if window_size < 2:
+            return 0.0
+
+        prior_history = self.best_decision_history[-(window_size - 1):]
+        score_window = prior_history + [(best_hypothesis, best_decision_score)]
+        if len(score_window) < window_size:
+            return 0.0
+
+        hypotheses = [hypothesis for hypothesis, _ in score_window]
+        if len(set(hypotheses)) != 1:
+            return 0.0
+
+        score_differences = [
+            abs(score_window[index][1] - score_window[index - 1][1])
+            for index in range(1, len(score_window))
+        ]
+        average_difference = float(np.mean(score_differences, dtype = np.float32))
+        epsilon = float(constants.DS_THRESHOLD_STABILITY_EPSILON)
+        if epsilon <= 0:
+            return 0.0
+
+        return max(0.0, 1.0 - average_difference / epsilon)
+
+    def append_best_decision_history(self):
+        """Append the current best hypothesis and score to the short stability history."""
+        best_hypothesis, best_decision_score = self.get_best_decision_score()
+        if best_hypothesis is None or best_decision_score < 0:
+            return
+
+        self.best_decision_history.append((best_hypothesis, best_decision_score))
+        max_history_length = max(0, int(constants.DS_THRESHOLD_SCORE_WINDOW) - 1)
+        if max_history_length == 0:
+            self.best_decision_history = []
+            return
+        if len(self.best_decision_history) > max_history_length:
+            self.best_decision_history = self.best_decision_history[-max_history_length:]
+
     def update_dynamic_threshold(self):
-        """Update the shared threshold by combining a local proposal with neighbor thresholds."""
+        """Update the threshold from confidence, decided-neighbor majority, stability, and neighbor consensus."""
         current_threshold = self.get_dynamic_threshold()
-        local_threshold = self.calculate_local_threshold_proposal()
+        confidence_threshold = self.calculate_confidence_threshold_proposal()
+        majority_factor = self.calculate_decided_neighbor_majority_factor()
+        stability_factor = self.calculate_stability_factor()
+        relaxation_factor = (
+            constants.DS_THRESHOLD_DECIDED_NEIGHBOR_GAIN * majority_factor
+            + constants.DS_THRESHOLD_STABILITY_GAIN * stability_factor
+        )
+        relaxation_factor = float(np.clip(relaxation_factor, 0.0, 1.0))
+        local_threshold = confidence_threshold - relaxation_factor * (
+            confidence_threshold - constants.DS_THRESHOLD_MIN
+        )
+        local_threshold = float(np.clip(local_threshold, constants.DS_THRESHOLD_MIN, constants.DS_THRESHOLD_MAX))
         anchored_threshold = (
             (1.0 - constants.DS_THRESHOLD_LOCAL_GAIN) * current_threshold
             + constants.DS_THRESHOLD_LOCAL_GAIN * local_threshold

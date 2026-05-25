@@ -11,7 +11,7 @@ import utils
 
 NUMBER_OF_TRIALS = 100
 
-SIMULATION_SPEED_UP_FACTOR = 1.0
+SIMULATION_SPEED_UP_FACTOR = 2.0
 SIMULATION_LOOP_PERIOD = 0.01
 
 IMAGE_DIR = "data/subimages/"
@@ -54,9 +54,18 @@ def parse_optional_argument(raw_extra_args, prefix, cast = str):
     return None
 
 def build_results_paths(experiment_name):
-    """Build output CSV paths inside results/continuous_est."""
+    """Build output CSV paths inside the appropriate results/continuous_est category."""
     experiment_stem = os.path.splitext(os.path.basename(experiment_name))[0]
-    experiment_dir = os.path.join(RESULTS_DIR, experiment_stem)
+    if experiment_stem.startswith("swarm_size"):
+        category_dir = "swarm_size"
+    elif experiment_stem.startswith("decision_threshold") or experiment_stem.startswith("threshold_"):
+        category_dir = "decision_threshold"
+    elif experiment_stem.startswith("social_fusion") or experiment_stem.startswith("compatibility_gain"):
+        category_dir = "social_fusion"
+    else:
+        category_dir = "top_k_ds"
+
+    experiment_dir = os.path.join(RESULTS_DIR, category_dir, experiment_stem)
     return {
         "trial_summary": os.path.join(experiment_dir, "trial_summary.csv"),
         "agent_final_states": os.path.join(experiment_dir, "agent_final_states.csv"),
@@ -722,6 +731,15 @@ def experiment(
             position_error_meters = calculate_position_error_meters(initial_position, final_position)
             number_of_different_final_decisions = len({decision for decision in decisions if decision is not None})
             number_of_final_candidate_tiles = len(final_decision_tiles)
+            all_received_opinion_counts = [
+                snapshot["unique_received_opinion_count"]
+                for agent in agents
+                for snapshot in agent.decision_dynamics
+            ]
+            average_unique_received_opinions_per_agent_per_cycle = (
+                float(np.mean(all_received_opinion_counts, dtype = np.float32))
+                if all_received_opinion_counts else 0.0
+            )
             first_decided_time, half_decided_time, all_decided_time, late_stage_waiting_gap, decided_agent_count = calculate_decision_progress_times(agents)
 
             decision = format_final_decision(decisions, image_dir)
@@ -748,6 +766,7 @@ def experiment(
                 "all_decided_time": all_decided_time,
                 "late_stage_waiting_gap": late_stage_waiting_gap,
                 "decided_agent_count": decided_agent_count,
+                "average_unique_received_opinions_per_agent_per_cycle": average_unique_received_opinions_per_agent_per_cycle,
             }
             return trial_summary, agents, test_image.shape
 
@@ -772,6 +791,7 @@ def main(
     top_k = None,
     singleton_weight = None,
     compatibility_gain = None,
+    communication_range = None,
 ):
     """Main experiment entry.
 
@@ -786,6 +806,8 @@ def main(
         constants.DS_THRESHOLD_MIN = float(threshold_min)
     if threshold_max is not None:
         constants.DS_THRESHOLD_MAX = float(threshold_max)
+    if communication_range is not None:
+        constants.COMMUNICATION_RANGE = float(communication_range)
     if threshold_value is not None:
         constants.DS_THRESHOLD_MIN = min(constants.DS_THRESHOLD_MIN, constants.DS_DECISION_THRESHOLD)
         constants.DS_THRESHOLD_MAX = max(constants.DS_THRESHOLD_MAX, constants.DS_DECISION_THRESHOLD)
@@ -822,6 +844,7 @@ def main(
             threshold_type,
             constants.DS_DECISION_THRESHOLD,
             social_fusion_type,
+            constants.COMMUNICATION_RANGE,
             constants.DS_THRESHOLD_MIN,
             constants.DS_THRESHOLD_MAX,
             dm.DS_TOP_K,
@@ -837,6 +860,7 @@ def main(
             trial_summary["half_decided_time"],
             trial_summary["all_decided_time"],
             trial_summary["late_stage_waiting_gap"],
+            trial_summary["average_unique_received_opinions_per_agent_per_cycle"],
             trial_summary["position_error_meters"],
             trial_summary["elapsed_time"],
         ]
@@ -848,6 +872,7 @@ def main(
             "threshold_type",
             "threshold_value",
             "social_fusion_type",
+            "communication_range",
             "threshold_min",
             "threshold_max",
             "top_k",
@@ -863,6 +888,7 @@ def main(
             "half_decided_time",
             "all_decided_time",
             "late_stage_waiting_gap",
+            "average_unique_received_opinions_per_agent_per_cycle",
             "position_error_meters",
             "consensus_time",
         ]
@@ -872,6 +898,8 @@ def main(
             best_hypothesis, best_score = agent.get_best_decision_score()
             best_focal_set, best_focal_mass = agent.get_best_focal_set_and_mass()
             final_decision = agent.get_decision()
+            received_opinion_counts = [snapshot["unique_received_opinion_count"] for snapshot in agent.decision_dynamics]
+            average_unique_received_opinions = float(np.mean(received_opinion_counts, dtype = np.float32)) if received_opinion_counts else 0.0
             agent_final_row = [
                 experiment_name,
                 trial + 1,
@@ -880,6 +908,7 @@ def main(
                 threshold_type,
                 constants.DS_DECISION_THRESHOLD,
                 social_fusion_type,
+                constants.COMMUNICATION_RANGE,
                 agent.id,
                 final_decision,
                 "" if final_decision is None else convert_decision_index_to_subimage_name(final_decision, image_shape),
@@ -891,6 +920,7 @@ def main(
                 best_focal_mass,
                 agent.first_decision_cycle,
                 agent.first_decision_time,
+                average_unique_received_opinions,
             ]
             agent_final_header = [
                 "experiment_name",
@@ -900,6 +930,7 @@ def main(
                 "threshold_type",
                 "threshold_value",
                 "social_fusion_type",
+                "communication_range",
                 "agent_id",
                 "final_decision_index",
                 "final_decision_name",
@@ -911,6 +942,7 @@ def main(
                 "best_focal_mass",
                 "first_decision_cycle",
                 "first_decision_time",
+                "average_unique_received_opinions_per_cycle",
             ]
             utils.write_results_to_csv(results_paths["agent_final_states"], agent_final_row, header = agent_final_header)
 
@@ -923,6 +955,7 @@ def main(
                     threshold_type,
                     constants.DS_DECISION_THRESHOLD,
                     social_fusion_type,
+                    constants.COMMUNICATION_RANGE,
                     dm.DS_TOP_K,
                     dm.DS_SINGLETON_WEIGHT,
                     dm.DS_NEIGHBOR_COMPATIBILITY_GAIN,
@@ -933,6 +966,7 @@ def main(
                     "" if snapshot["best_hypothesis"] is None else convert_decision_index_to_subimage_name(snapshot["best_hypothesis"], image_shape),
                     snapshot["best_score"],
                     snapshot["threshold"],
+                    snapshot["unique_received_opinion_count"],
                     snapshot["decision"],
                     "" if snapshot["decision"] is None else convert_decision_index_to_subimage_name(snapshot["decision"], image_shape),
                     snapshot["decision"] is not None,
@@ -945,6 +979,7 @@ def main(
                     "threshold_type",
                     "threshold_value",
                     "social_fusion_type",
+                    "communication_range",
                     "top_k",
                     "singleton_weight",
                     "compatibility_gain",
@@ -955,6 +990,7 @@ def main(
                     "best_hypothesis_name",
                     "best_decision_score",
                     "threshold",
+                    "unique_received_opinion_count",
                     "decision_index",
                     "decision_name",
                     "is_decided",
@@ -979,6 +1015,7 @@ if __name__ == "__main__":
     top_k = parse_optional_argument(raw_extra_args, "--top_k=", int)
     singleton_weight = parse_optional_argument(raw_extra_args, "--singleton_weight=", float)
     compatibility_gain = parse_optional_argument(raw_extra_args, "--compatibility_gain=", float)
+    communication_range = parse_optional_argument(raw_extra_args, "--communication_range=", float)
     terrain_flags = [TERRAIN_FLAGS[arg] for arg in extra_args if arg in TERRAIN_FLAGS]
     terrain = terrain_flags[0] if terrain_flags else None
 
@@ -1003,6 +1040,7 @@ if __name__ == "__main__":
         top_k,
         singleton_weight,
         compatibility_gain,
+        communication_range,
     )
 
     
