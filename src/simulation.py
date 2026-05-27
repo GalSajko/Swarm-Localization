@@ -11,7 +11,7 @@ import utils
 
 NUMBER_OF_TRIALS = 100
 
-SIMULATION_SPEED_UP_FACTOR = 2.0
+SIMULATION_SPEED_UP_FACTOR = 5.0
 SIMULATION_LOOP_PERIOD = 0.01
 
 IMAGE_DIR = "data/subimages/"
@@ -42,6 +42,7 @@ SUBAREA_GRID_COLOR = (245, 245, 245)
 START_POSITION_COLOR = (0, 0, 255)
 WINNER_TILE_COLOR = (0, 0, 255)
 FINAL_POSITION_COLOR = (0, 255, 0)
+CONSENSUS_POSITION_COLOR = (0, 255, 255)
 METERS_PER_PIXEL = 2.0
 
 consensus_times = []
@@ -60,6 +61,8 @@ def build_results_paths(experiment_name):
         category_dir = "swarm_size"
     elif experiment_stem.startswith("decision_threshold") or experiment_stem.startswith("threshold_"):
         category_dir = "decision_threshold"
+    elif experiment_stem.startswith("laplacian"):
+        category_dir = "laplacian"
     elif experiment_stem.startswith("social_fusion") or experiment_stem.startswith("compatibility_gain"):
         category_dir = "social_fusion"
     else:
@@ -96,6 +99,40 @@ def calculate_random_position(image, min_x = None, max_x = None, min_y = None, m
             np.random.uniform(min_y, max_y),
         ],
         dtype = np.float32,
+    )
+
+def calculate_random_search_area_center_position(image):
+    """Sample a shared swarm start position that stays at the true center of the search area.
+
+    The sampled position is constrained so the full search area can be centered on it
+    without clipping against the terrain border.
+    """
+    rows, cols = calculate_grid_shape(constants.NUMBER_OF_AGENTS)
+    image_height, image_width = image.shape[:2]
+    subimage_width = image_width / SUBIMAGE_GRID_SIZE[0]
+    subimage_height = image_height / SUBIMAGE_GRID_SIZE[1]
+
+    cell_width = subimage_width / 2
+    cell_height = subimage_height / 2
+    search_width = cols * cell_width
+    search_height = rows * cell_height
+
+    min_x = search_width / 2
+    max_x = image_width - search_width / 2
+    min_y = search_height / 2
+    max_y = image_height - search_height / 2
+
+    if min_x > max_x:
+        min_x = max_x = image_width / 2
+    if min_y > max_y:
+        min_y = max_y = image_height / 2
+
+    return calculate_random_position(
+        image,
+        min_x = min_x,
+        max_x = max_x,
+        min_y = min_y,
+        max_y = max_y,
     )
 
 def calculate_initial_positions_from_search_cells(search_cells):
@@ -190,6 +227,29 @@ def calculate_search_cells(image, initial_position):
             )
 
     return cells, (float(min_x), float(max_x), float(min_y), float(max_y))
+
+def calculate_fixed_adjacency_neighbors(agent_count):
+    """Build 8-connected neighbor lists over the search-cell grid."""
+    rows, cols = calculate_grid_shape(agent_count)
+    neighbor_ids = []
+
+    for agent_index in range(agent_count):
+        row_index = agent_index // cols
+        col_index = agent_index % cols
+        agent_neighbors = []
+
+        for row_offset in (-1, 0, 1):
+            for col_offset in (-1, 0, 1):
+                if row_offset == 0 and col_offset == 0:
+                    continue
+                neighbor_row = row_index + row_offset
+                neighbor_col = col_index + col_offset
+                if 0 <= neighbor_row < rows and 0 <= neighbor_col < cols:
+                    agent_neighbors.append(neighbor_row * cols + neighbor_col)
+
+        neighbor_ids.append(sorted(agent_neighbors))
+
+    return neighbor_ids
 
 def calculate_search_area_tile_count(search_area_bounds, image_shape):
     """Count how many subarea tiles intersect the rectangular search area."""
@@ -327,6 +387,39 @@ def visualize_final_position_cross(image, final_position):
     cv2.line(image, start_diag_a, end_diag_a, FINAL_POSITION_COLOR, cross_thickness, cv2.LINE_AA)
     cv2.line(image, start_diag_b, end_diag_b, FINAL_POSITION_COLOR, cross_thickness, cv2.LINE_AA)
 
+def visualize_colored_cross(image, position, color, half_size = 14):
+    """Draw a high-visibility cross in the requested color."""
+    center = tuple(np.rint(position).astype(np.int32))
+    shadow_thickness = 6
+    cross_thickness = 3
+    shadow_color = (255, 255, 255)
+    start_diag_a = (center[0] - half_size, center[1] - half_size)
+    end_diag_a = (center[0] + half_size, center[1] + half_size)
+    start_diag_b = (center[0] - half_size, center[1] + half_size)
+    end_diag_b = (center[0] + half_size, center[1] - half_size)
+
+    cv2.line(image, start_diag_a, end_diag_a, shadow_color, shadow_thickness, cv2.LINE_AA)
+    cv2.line(image, start_diag_b, end_diag_b, shadow_color, shadow_thickness, cv2.LINE_AA)
+    cv2.line(image, start_diag_a, end_diag_a, color, cross_thickness, cv2.LINE_AA)
+    cv2.line(image, start_diag_b, end_diag_b, color, cross_thickness, cv2.LINE_AA)
+
+def visualize_live_white_cross(image, position, half_size = 16):
+    """Draw a high-contrast white cross for live Laplacian consensus positions."""
+    center = tuple(np.rint(position).astype(np.int32))
+    outline_color = (0, 0, 0)
+    cross_color = (255, 255, 255)
+    outline_thickness = 8
+    cross_thickness = 5
+    start_diag_a = (center[0] - half_size, center[1] - half_size)
+    end_diag_a = (center[0] + half_size, center[1] + half_size)
+    start_diag_b = (center[0] - half_size, center[1] + half_size)
+    end_diag_b = (center[0] + half_size, center[1] - half_size)
+
+    cv2.line(image, start_diag_a, end_diag_a, outline_color, outline_thickness, cv2.LINE_AA)
+    cv2.line(image, start_diag_b, end_diag_b, outline_color, outline_thickness, cv2.LINE_AA)
+    cv2.line(image, start_diag_a, end_diag_a, cross_color, cross_thickness, cv2.LINE_AA)
+    cv2.line(image, start_diag_b, end_diag_b, cross_color, cross_thickness, cv2.LINE_AA)
+
 def visualize_agent(agent, image, target_subimage_name, image_dir):
     """Visualize agent on the image.
 
@@ -441,6 +534,26 @@ def calculate_final_decision_scores(agents, decision_tiles):
         )
     return decision_scores
 
+def collect_current_best_hypothesis_tiles(agents):
+    """Collect the unique set of current best-hypothesis tiles across agents."""
+    best_tiles = set()
+    for agent in agents:
+        best_hypothesis, _ = agent.get_best_decision_score()
+        if best_hypothesis is not None:
+            best_tiles.add(int(best_hypothesis))
+    return sorted(best_tiles)
+
+def calculate_current_best_hypothesis_scores(agents, decision_tiles):
+    """Aggregate current best-decision scores over the live best-hypothesis tile set."""
+    decision_scores = {}
+    for decision in decision_tiles:
+        decision_scores[decision] = sum(
+            float(agent.get_best_decision_score()[1])
+            for agent in agents
+            if agent.get_best_decision_score()[0] == decision
+        )
+    return decision_scores
+
 def calculate_final_weighted_position(decision_scores, image_shape):
     """Calculate a centralized weighted-average final position from decision-tile scores."""
     if not decision_scores:
@@ -493,6 +606,13 @@ def visualize_final_decision_tiles(image, decision_tiles, decision_colors):
         start_point, end_point = convert_decision_to_tile_bounds(decision, image.shape)
         cv2.rectangle(image, start_point, end_point, color, 4, cv2.LINE_AA)
 
+def visualize_live_decision_tiles(image, decision_tiles, decision_colors):
+    """Draw thicker live best-hypothesis tile outlines for Laplacian visualization."""
+    for decision in decision_tiles:
+        color = decision_colors[decision]
+        start_point, end_point = convert_decision_to_tile_bounds(decision, image.shape)
+        cv2.rectangle(image, start_point, end_point, color, 7, cv2.LINE_AA)
+
 def visualize_final_agents(image, agents, decision_colors):
     """Draw agents using the same color as their final decision tile."""
     for agent in agents:
@@ -505,6 +625,23 @@ def visualize_final_agents(image, agents, decision_colors):
         end_point = np.array(position + constants.AGENT_SIZE / 2).astype(np.int32)
         color = decision_colors.get(decision, WINNER_TILE_COLOR)
         cv2.rectangle(image, start_point, end_point, color, 5, cv2.LINE_AA)
+
+def visualize_live_consensus_positions(image, agents):
+    """Draw each agent's current Laplacian consensus estimate as a small white cross."""
+    for agent in agents:
+        consensus_position = agent.get_consensus_position()
+        if consensus_position is None:
+            continue
+        visualize_live_white_cross(image, consensus_position, half_size = 16)
+
+def visualize_live_best_hypothesis_tiles(image, agents):
+    """Draw current best-hypothesis tiles using the same heat-style outline as the final overlay."""
+    decision_tiles = collect_current_best_hypothesis_tiles(agents)
+    if not decision_tiles:
+        return
+    decision_scores = calculate_current_best_hypothesis_scores(agents, decision_tiles)
+    decision_colors = get_final_decision_colors(decision_scores)
+    visualize_live_decision_tiles(image, decision_tiles, decision_colors)
 
 def build_final_winner_overlay(image, agents, initial_position = None):
     """Build the final visualization frame with decision tiles, agents and markers."""
@@ -521,6 +658,58 @@ def build_final_winner_overlay(image, agents, initial_position = None):
         visualize_final_position_cross(overlay_image, final_position)
 
     return overlay_image
+
+def collect_final_consensus_positions(agents):
+    """Collect all initialized per-agent consensus positions."""
+    consensus_positions = []
+    for agent in agents:
+        consensus_position = agent.get_consensus_position()
+        if consensus_position is not None:
+            consensus_positions.append(np.asarray(consensus_position, dtype = np.float32))
+    return consensus_positions
+
+def calculate_laplacian_final_position(consensus_positions):
+    """Return the mean consensus position across all initialized agents."""
+    if not consensus_positions:
+        return None
+    return np.mean(np.asarray(consensus_positions, dtype = np.float32), axis = 0)
+
+def calculate_consensus_spread(consensus_positions, mean_position):
+    """Return x/y standard deviation and mean per-agent error of final consensus estimates in meters."""
+    if not consensus_positions or mean_position is None:
+        return None, None, None
+
+    position_array = np.asarray(consensus_positions, dtype = np.float32)
+    standard_deviation_xy_pixels = np.std(position_array, axis = 0, dtype = np.float32)
+    standard_deviation_xy_meters = standard_deviation_xy_pixels * METERS_PER_PIXEL
+    mean_error_meters = float(
+        np.mean(
+            np.linalg.norm(position_array - np.asarray(mean_position, dtype = np.float32), axis = 1),
+            dtype = np.float32,
+        ) * METERS_PER_PIXEL
+    )
+    return float(standard_deviation_xy_meters[0]), float(standard_deviation_xy_meters[1]), mean_error_meters
+
+def build_laplacian_final_overlay(image, agents, initial_position = None):
+    """Build the Laplacian-mode final visualization with per-agent consensus crosses."""
+    overlay_image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+    decision_tiles = collect_final_decision_tiles(agents)
+    decision_scores = calculate_final_decision_scores(agents, decision_tiles)
+    decision_colors = get_final_decision_colors(decision_scores)
+    visualize_final_decision_tiles(overlay_image, decision_tiles, decision_colors)
+    visualize_final_agents(overlay_image, agents, decision_colors)
+    if initial_position is not None:
+        visualize_start_position_cross(overlay_image, initial_position)
+
+    consensus_positions = collect_final_consensus_positions(agents)
+    for consensus_position in consensus_positions:
+        visualize_colored_cross(overlay_image, consensus_position, CONSENSUS_POSITION_COLOR)
+
+    final_position = calculate_laplacian_final_position(consensus_positions)
+    if final_position is not None:
+        visualize_final_position_cross(overlay_image, final_position)
+
+    return overlay_image, final_position, consensus_positions
 
 def wait_for_next_trial_key(window_name, overlay_image):
     """Show the final overlay persistently and wait for a fresh key press."""
@@ -547,6 +736,13 @@ def check_for_termination(agents, use_fixed_threshold = False):
         best_hypothesis, best_score = agent.get_best_decision_score()
         threshold = agent.decision_threshold if use_fixed_threshold else agent.get_dynamic_threshold()
         if best_hypothesis is None or best_score < threshold:
+            return False
+    return True
+
+def check_for_laplacian_termination(agents):
+    """Check whether every agent has completed the post-freeze Laplacian consensus phase."""
+    for agent in agents:
+        if not agent.is_laplacian_done():
             return False
     return True
 
@@ -644,6 +840,7 @@ def experiment(
     visualize = False,
     use_fixed_threshold = False,
     use_yager_social_fusion = False,
+    use_laplacian = False,
     threshold_value = None,
 ):
     """Single run of the experiment.
@@ -654,7 +851,7 @@ def experiment(
     image_dir = get_image_dir_for_terrain(terrain)
     codebook_path = get_codebook_path_for_terrain(terrain)
     test_image = cv2.imread(get_original_image_path_for_terrain(terrain), cv2.IMREAD_GRAYSCALE)
-    initial_position = calculate_random_position(test_image)
+    initial_position = calculate_random_search_area_center_position(test_image)
     target_subimage_name = convert_position_to_subimage_name(initial_position, test_image.shape)
 
     print(
@@ -669,6 +866,7 @@ def experiment(
     search_area_tile_count = calculate_search_area_tile_count(search_area_bounds, test_image.shape)
     subarea_tile_size_square_meters = calculate_subarea_tile_size_square_meters(test_image.shape)
     positions = calculate_initial_positions_from_search_cells(search_cells)
+    fixed_adjacency_neighbors = calculate_fixed_adjacency_neighbors(len(positions))
     trial_start_time = time.time()
     agents = [
         Agent(
@@ -681,6 +879,8 @@ def experiment(
             search_cells[i],
             use_fixed_threshold = use_fixed_threshold,
             use_yager_social_fusion = use_yager_social_fusion,
+            use_laplacian_consensus = use_laplacian,
+            fixed_neighbor_ids = fixed_adjacency_neighbors[i],
             threshold_value = threshold_value,
             trial_start_time = trial_start_time,
         )
@@ -691,6 +891,7 @@ def experiment(
     elapsed_time = 0
     max_experiment_time = constants.MAX_EXPERIMENT_TIME / SIMULATION_SPEED_UP_FACTOR
     final_overlay_image = None
+    next_laplacian_communication_time = 0.0
 
     while True:
         loop_start_time = time.time()
@@ -700,16 +901,37 @@ def experiment(
             visualize_search_area(image_copy, search_area_bounds)
             visualize_start_position(image_copy, initial_position)
 
+        simulated_elapsed_time = elapsed_time * SIMULATION_SPEED_UP_FACTOR
+        if use_laplacian:
+            while simulated_elapsed_time >= next_laplacian_communication_time:
+                for agent in agents:
+                    agent.reset_social_buffers()
+                for agent in agents:
+                    agent.collect_opinions(agents)
+                for agent in agents:
+                    agent.run_laplacian_decision_cycle()
+                next_laplacian_communication_time += constants.LAPLACIAN_COMMUNICATION_PERIOD
+
         decisions = []
         for agent in agents:
             if visualize:
                 visualize_agent(agent, image_copy, target_subimage_name, image_dir)
-            if agent.get_state() == constants.RECEIVING_STATE:
+            if not use_laplacian and agent.get_state() == constants.RECEIVING_STATE:
                 agent.collect_opinions(agents)
             
             decisions.append(agent.get_decision())
 
-        if check_for_termination(agents, use_fixed_threshold) or elapsed_time > max_experiment_time:
+        if visualize and use_laplacian:
+            visualize_live_best_hypothesis_tiles(image_copy, agents)
+            visualize_live_consensus_positions(image_copy, agents)
+
+        termination_reached = (
+            check_for_laplacian_termination(agents)
+            if use_laplacian
+            else check_for_termination(agents, use_fixed_threshold)
+        )
+
+        if termination_reached or elapsed_time > max_experiment_time:
             consensus_times.append(elapsed_time)
             timeout_reached = elapsed_time > max_experiment_time
             decisions = []
@@ -720,14 +942,31 @@ def experiment(
             for agent in agents:
                 agent.stop_threads()
 
-            final_overlay_image = build_final_winner_overlay(
-                test_image,
-                agents,
-                initial_position,
-            )
-            final_decision_tiles = collect_final_decision_tiles(agents)
-            final_decision_scores = calculate_final_decision_scores(agents, final_decision_tiles)
-            final_position = calculate_final_weighted_position(final_decision_scores, test_image.shape)
+            if use_laplacian:
+                final_overlay_image, final_position, final_consensus_positions = build_laplacian_final_overlay(
+                    test_image,
+                    agents,
+                    initial_position,
+                )
+                final_decision_tiles = collect_final_decision_tiles(agents)
+                final_decision_scores = calculate_final_decision_scores(agents, final_decision_tiles)
+                consensus_std_x_meters, consensus_std_y_meters, consensus_mean_error_meters = calculate_consensus_spread(
+                    final_consensus_positions,
+                    final_position,
+                )
+            else:
+                final_overlay_image = build_final_winner_overlay(
+                    test_image,
+                    agents,
+                    initial_position,
+                )
+                final_decision_tiles = collect_final_decision_tiles(agents)
+                final_decision_scores = calculate_final_decision_scores(agents, final_decision_tiles)
+                final_position = calculate_final_weighted_position(final_decision_scores, test_image.shape)
+                final_consensus_positions = []
+                consensus_std_x_meters = None
+                consensus_std_y_meters = None
+                consensus_mean_error_meters = None
             position_error_meters = calculate_position_error_meters(initial_position, final_position)
             number_of_different_final_decisions = len({decision for decision in decisions if decision is not None})
             number_of_final_candidate_tiles = len(final_decision_tiles)
@@ -747,6 +986,19 @@ def experiment(
             elapsed_time_rescaled = elapsed_time * SIMULATION_SPEED_UP_FACTOR
             print(f'FINAL DECISION: {decision}, ELAPSED TIME: {elapsed_time_rescaled}')
             print(f"FINAL DECISION SCORES: {format_final_decision_scores(final_decision_scores, test_image.shape)}")
+            if use_laplacian:
+                formatted_consensus_positions = [
+                    f"agent {agent.id}: ({consensus_position[0]:.2f}, {consensus_position[1]:.2f})"
+                    for agent in agents
+                    for consensus_position in [agent.get_consensus_position()]
+                    if consensus_position is not None
+                ]
+                print(f"LAPLACIAN FINAL CONSENSUS POSITIONS: {formatted_consensus_positions}")
+                print(
+                    "LAPLACIAN CONSENSUS SPREAD: "
+                    f"std_x_meters={consensus_std_x_meters}, std_y_meters={consensus_std_y_meters}, "
+                    f"mean_error_meters={consensus_mean_error_meters}"
+                )
             print(f"FINAL POSITION ERROR [m]: {position_error_meters}")
 
             if visualize:
@@ -767,6 +1019,11 @@ def experiment(
                 "late_stage_waiting_gap": late_stage_waiting_gap,
                 "decided_agent_count": decided_agent_count,
                 "average_unique_received_opinions_per_agent_per_cycle": average_unique_received_opinions_per_agent_per_cycle,
+                "final_position_x": None if final_position is None else float(final_position[0]),
+                "final_position_y": None if final_position is None else float(final_position[1]),
+                "consensus_std_x_meters": consensus_std_x_meters,
+                "consensus_std_y_meters": consensus_std_y_meters,
+                "consensus_mean_error_meters": consensus_mean_error_meters,
             }
             return trial_summary, agents, test_image.shape
 
@@ -783,6 +1040,7 @@ def main(
     visualize = False,
     use_fixed_threshold = False,
     use_yager_social_fusion = False,
+    use_laplacian = False,
     num_trials = NUMBER_OF_TRIALS,
     num_agents = None,
     threshold_value = None,
@@ -826,6 +1084,7 @@ def main(
     results_paths = build_results_paths(experiment_name)
     threshold_type = constants.DS_DECISION_THRESHOLD if use_fixed_threshold else "dynamic"
     social_fusion_type = "yager" if use_yager_social_fusion else "compatibility_boost"
+    consensus_method = "laplacian" if use_laplacian else "current"
 
     for trial in range(num_trials):
         trial_summary, agents, image_shape = experiment(
@@ -834,6 +1093,7 @@ def main(
             visualize,
             use_fixed_threshold,
             use_yager_social_fusion,
+            use_laplacian,
             threshold_value,
         )
         trial_summary_row = [
@@ -844,6 +1104,7 @@ def main(
             threshold_type,
             constants.DS_DECISION_THRESHOLD,
             social_fusion_type,
+            consensus_method,
             constants.COMMUNICATION_RANGE,
             constants.DS_THRESHOLD_MIN,
             constants.DS_THRESHOLD_MAX,
@@ -861,6 +1122,11 @@ def main(
             trial_summary["all_decided_time"],
             trial_summary["late_stage_waiting_gap"],
             trial_summary["average_unique_received_opinions_per_agent_per_cycle"],
+            trial_summary["final_position_x"],
+            trial_summary["final_position_y"],
+            trial_summary["consensus_std_x_meters"],
+            trial_summary["consensus_std_y_meters"],
+            trial_summary["consensus_mean_error_meters"],
             trial_summary["position_error_meters"],
             trial_summary["elapsed_time"],
         ]
@@ -872,6 +1138,7 @@ def main(
             "threshold_type",
             "threshold_value",
             "social_fusion_type",
+            "consensus_method",
             "communication_range",
             "threshold_min",
             "threshold_max",
@@ -889,6 +1156,11 @@ def main(
             "all_decided_time",
             "late_stage_waiting_gap",
             "average_unique_received_opinions_per_agent_per_cycle",
+            "final_position_x",
+            "final_position_y",
+            "consensus_std_x_meters",
+            "consensus_std_y_meters",
+            "consensus_mean_error_meters",
             "position_error_meters",
             "consensus_time",
         ]
@@ -900,6 +1172,7 @@ def main(
             final_decision = agent.get_decision()
             received_opinion_counts = [snapshot["unique_received_opinion_count"] for snapshot in agent.decision_dynamics]
             average_unique_received_opinions = float(np.mean(received_opinion_counts, dtype = np.float32)) if received_opinion_counts else 0.0
+            final_consensus_position = agent.get_consensus_position()
             agent_final_row = [
                 experiment_name,
                 trial + 1,
@@ -908,6 +1181,7 @@ def main(
                 threshold_type,
                 constants.DS_DECISION_THRESHOLD,
                 social_fusion_type,
+                consensus_method,
                 constants.COMMUNICATION_RANGE,
                 agent.id,
                 final_decision,
@@ -920,6 +1194,11 @@ def main(
                 best_focal_mass,
                 agent.first_decision_cycle,
                 agent.first_decision_time,
+                None if final_consensus_position is None else float(final_consensus_position[0]),
+                None if final_consensus_position is None else float(final_consensus_position[1]),
+                agent.get_consensus_stable_counter(),
+                agent.is_laplacian_frozen(),
+                agent.is_laplacian_done(),
                 average_unique_received_opinions,
             ]
             agent_final_header = [
@@ -930,6 +1209,7 @@ def main(
                 "threshold_type",
                 "threshold_value",
                 "social_fusion_type",
+                "consensus_method",
                 "communication_range",
                 "agent_id",
                 "final_decision_index",
@@ -942,6 +1222,11 @@ def main(
                 "best_focal_mass",
                 "first_decision_cycle",
                 "first_decision_time",
+                "final_consensus_position_x",
+                "final_consensus_position_y",
+                "consensus_stable_counter",
+                "laplacian_frozen",
+                "laplacian_done",
                 "average_unique_received_opinions_per_cycle",
             ]
             utils.write_results_to_csv(results_paths["agent_final_states"], agent_final_row, header = agent_final_header)
@@ -955,6 +1240,7 @@ def main(
                     threshold_type,
                     constants.DS_DECISION_THRESHOLD,
                     social_fusion_type,
+                    consensus_method,
                     constants.COMMUNICATION_RANGE,
                     dm.DS_TOP_K,
                     dm.DS_SINGLETON_WEIGHT,
@@ -967,6 +1253,13 @@ def main(
                     snapshot["best_score"],
                     snapshot["threshold"],
                     snapshot["unique_received_opinion_count"],
+                    snapshot["consensus_position_x"],
+                    snapshot["consensus_position_y"],
+                    snapshot["consensus_position_change"],
+                    snapshot["consensus_confidence"],
+                    snapshot["consensus_initialized"],
+                    snapshot["laplacian_frozen"],
+                    snapshot["laplacian_done"],
                     snapshot["decision"],
                     "" if snapshot["decision"] is None else convert_decision_index_to_subimage_name(snapshot["decision"], image_shape),
                     snapshot["decision"] is not None,
@@ -979,6 +1272,7 @@ def main(
                     "threshold_type",
                     "threshold_value",
                     "social_fusion_type",
+                    "consensus_method",
                     "communication_range",
                     "top_k",
                     "singleton_weight",
@@ -991,6 +1285,13 @@ def main(
                     "best_decision_score",
                     "threshold",
                     "unique_received_opinion_count",
+                    "consensus_position_x",
+                    "consensus_position_y",
+                    "consensus_position_change",
+                    "consensus_confidence",
+                    "consensus_initialized",
+                    "laplacian_frozen",
+                    "laplacian_done",
                     "decision_index",
                     "decision_name",
                     "is_decided",
@@ -1007,6 +1308,7 @@ if __name__ == "__main__":
     visualize = "--visualize" in extra_args
     use_fixed_threshold = "--fixed_threshold" in extra_args
     use_yager_social_fusion = "--yager" in extra_args
+    use_laplacian = "--laplacian" in extra_args
     num_trials = parse_optional_argument(raw_extra_args, "--trials=", int)
     num_agents = parse_optional_argument(raw_extra_args, "--num_agents=", int)
     threshold_value = parse_optional_argument(raw_extra_args, "--threshold_value=", float)
@@ -1032,6 +1334,7 @@ if __name__ == "__main__":
         visualize,
         use_fixed_threshold,
         use_yager_social_fusion,
+        use_laplacian,
         NUMBER_OF_TRIALS if num_trials is None else num_trials,
         num_agents,
         threshold_value,

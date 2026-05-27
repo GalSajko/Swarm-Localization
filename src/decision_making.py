@@ -3,9 +3,10 @@ import numpy as np
 DS_TOP_K = 4
 DS_SINGLETON_WEIGHT = 0.5
 DS_MAX_PAIR_FOCAL_SETS = 8
-DS_NEIGHBOR_COMPATIBILITY_GAIN = 0.25
+DS_NEIGHBOR_COMPATIBILITY_GAIN = 1.0
 DS_NEIGHBOR_SAME_TILE_SUPPORT = 1.0
-DS_NEIGHBOR_ADJACENT_TILE_SUPPORT = 0.7
+DS_NEIGHBOR_ADJACENT_TILE_SUPPORT = 0.9
+DS_NEIGHBOR_INCOMPATIBILITY_PENALTY = 0.3
 
 def configure_dempster_shafer(
     top_k = None,
@@ -23,7 +24,7 @@ def configure_dempster_shafer(
         DS_NEIGHBOR_COMPATIBILITY_GAIN = float(max(0.0, compatibility_gain))
 
 def dempster_shafer(personal_information, previous_mass, social_masses, theta_set, agent_id = None, use_yager_social_fusion = False):
-    """Fuse personal and social evidence using Yager's rule.
+    """Fuse personal and social evidence using Compatibility boost or Yager's rule.
 
     Args:
         personal_information (numpy.ndarray): Latest personal observation scores.
@@ -199,7 +200,39 @@ def _apply_neighbor_compatibility_boost(mass_dict, social_masses, theta_set, gri
         )
         boosted_mass[focal_set] = mass * (1.0 + DS_NEIGHBOR_COMPATIBILITY_GAIN * compatibility)
 
+    boosted_mass = _apply_best_singleton_incompatibility_penalty(
+        boosted_mass,
+        neighbor_best_singletons,
+        grid_shape,
+    )
     return _normalize_mass(boosted_mass)
+
+def _apply_best_singleton_incompatibility_penalty(mass_dict, neighbor_best_singletons, grid_shape):
+    """Apply a mild penalty when the local best singleton is incompatible with all neighbor best singletons."""
+    if not neighbor_best_singletons:
+        return mass_dict
+
+    best_singleton = _get_best_singleton_from_mass(mass_dict)
+    if best_singleton is None:
+        return mass_dict
+
+    best_singleton_focal_set = frozenset({best_singleton})
+    if best_singleton_focal_set not in mass_dict:
+        return mass_dict
+
+    has_compatible_neighbor = any(
+        neighbor_singleton == best_singleton
+        or _are_adjacent_tiles(best_singleton, neighbor_singleton, grid_shape)
+        for neighbor_singleton in neighbor_best_singletons
+    )
+    if has_compatible_neighbor:
+        return mass_dict
+
+    penalized_mass = dict(mass_dict)
+    penalized_mass[best_singleton_focal_set] = (
+        penalized_mass[best_singleton_focal_set] * DS_NEIGHBOR_INCOMPATIBILITY_PENALTY
+    )
+    return penalized_mass
 
 def _get_best_singleton_from_mass(mass_dict):
     """Return the strongest singleton from a DS mass function."""

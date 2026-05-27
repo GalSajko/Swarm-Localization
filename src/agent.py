@@ -21,6 +21,8 @@ class Agent:
         search_bounds = None,
         use_fixed_threshold = False,
         use_yager_social_fusion = False,
+        use_laplacian_consensus = False,
+        fixed_neighbor_ids = None,
         threshold_value = None,
         trial_start_time = None,
     ):
@@ -55,13 +57,17 @@ class Agent:
         self.min_dissemination_time = constants.MIN_DISSEMINATION_TIME / self.speed_up_factor
         self.movement_period = 0.01
         self.state_polling_period = 0.1 / self.speed_up_factor
-        self.initial_spawn_pause = 0.0
-        self.startup_release_time = time.time() + self.initial_spawn_pause
+        self.laplacian_cycle_period = constants.LAPLACIAN_COMMUNICATION_PERIOD / self.speed_up_factor
         self.trial_start_time = time.time() if trial_start_time is None else trial_start_time
+        self.startup_release_time = time.time()
 
         self.social_information = []
+        self.social_best_hypotheses = []
         self.social_thresholds = []
         self.social_decision_flags = []
+        self.social_consensus_positions = []
+        self.social_consensus_confidences = []
+        self.social_consensus_frozen_flags = []
         self.received_neighbor_ids = set()
         self.opinions = {}
         self.ds_scores = np.zeros(len(self.codebook), dtype = np.float32)
@@ -70,9 +76,21 @@ class Agent:
         self.decision_threshold = constants.DS_DECISION_THRESHOLD if threshold_value is None else float(threshold_value)
         self.use_fixed_threshold = use_fixed_threshold
         self.use_yager_social_fusion = use_yager_social_fusion
+        self.use_laplacian_consensus = use_laplacian_consensus
+        self.fixed_neighbor_ids = set() if fixed_neighbor_ids is None else {str(neighbor_id) for neighbor_id in fixed_neighbor_ids}
         self.dynamic_threshold = self.decision_threshold
         self.threshold_locker = threading.Lock()
         self.theta_set = set(range(len(self.codebook)))
+        self.consensus_position = None
+        self.previous_consensus_position = None
+        self.consensus_initialized = False
+        self.consensus_stable_counter = 0
+        self.laplacian_frozen = False
+        self.laplacian_done = False
+        self.laplacian_done_counter = 0
+        self.frozen_consensus_confidence = None
+        self.consensus_locker = threading.Lock()
+        self.grid_shape = dm._infer_grid_shape(len(self.codebook))
 
         # For results only
         self.max_opinions = []
@@ -407,7 +425,8 @@ class Agent:
             self.wait_for_startup_release()
             while True:
                 loop_start_time = time.time()
-                self.update_grid_search_position()
+                if not (self.use_laplacian_consensus and self.is_laplacian_frozen()):
+                    self.update_grid_search_position()
 
                 if self.do_stop:
                     return 
@@ -432,6 +451,9 @@ class Agent:
             descriptor_buffer_length = 1
             while not self.do_stop:
                 loop_start_time = time.time()
+                if self.use_laplacian_consensus and self.is_laplacian_frozen():
+                    utils.sleep_with_adjustable_period(self.exploration_period, loop_start_time)
+                    continue
                 photo = self.capture_photo()
                 self.update_descriptors(photo)
                 
@@ -494,13 +516,18 @@ class Agent:
         def decision_making_in_loop():
             self.wait_for_startup_release()
             exploration_thread = self.start_exploration_thread()
+            if self.use_laplacian_consensus:
+                self.set_state(constants.DECISION_MAKING_STATE)
+                while not self.do_stop:
+                    loop_start_time = time.time()
+                    utils.sleep_with_adjustable_period(self.state_polling_period, loop_start_time)
+                exploration_thread.join()
+                return
+
             while not self.do_stop:
                 # Receive social information. Method for collecting social information is called from the simulation module, because it needs access to other Agents objects. 
                 # Here we only set state and reset social information buffer.
-                self.social_information = []
-                self.social_thresholds = []
-                self.social_decision_flags = []
-                self.received_neighbor_ids = set()
+                self.reset_social_buffers()
                 self.set_state(constants.RECEIVING_STATE)
                 self.wait_for_scaled_duration(self.receiving_time)
 
@@ -517,6 +544,8 @@ class Agent:
                 )
                 if not self.use_fixed_threshold:
                     self.update_dynamic_threshold()
+                if self.use_laplacian_consensus:
+                    self.update_laplacian_consensus()
 
                 current_decision = self.calculate_decision()
                 self.set_decision(current_decision)
@@ -537,6 +566,42 @@ class Agent:
         decision_making_thread.start()
 
         return decision_making_thread
+
+    def run_laplacian_decision_cycle(self):
+        """Run one evidence-plus-consensus cycle in Laplacian mode."""
+        if not self.is_laplacian_frozen():
+            social_information = self.get_filtered_social_information()
+            self.opinions, self.ds_scores = dm.dempster_shafer(
+                self.get_personal_information(),
+                self.opinions,
+                social_information,
+                self.theta_set,
+                self.id,
+                self.use_yager_social_fusion,
+            )
+            if not self.use_fixed_threshold:
+                self.update_dynamic_threshold()
+            self.update_laplacian_consensus()
+            current_decision = self.calculate_decision()
+            self.set_decision(current_decision)
+            self.append_best_decision_history()
+            self.max_opinions.append(int(np.argmax(self.ds_scores)))
+        else:
+            self.update_frozen_average_consensus()
+            current_decision = self.get_decision()
+
+        self.record_decision_cycle(current_decision)
+
+    def reset_social_buffers(self):
+        """Clear one communication-cycle snapshot of received neighbor data."""
+        self.social_information = []
+        self.social_best_hypotheses = []
+        self.social_thresholds = []
+        self.social_decision_flags = []
+        self.social_consensus_positions = []
+        self.social_consensus_confidences = []
+        self.social_consensus_frozen_flags = []
+        self.received_neighbor_ids = set()
                 
     def collect_opinions(self, agents):
         """Receive opinions from the neighbours that are currently in dissemination state.
@@ -549,15 +614,72 @@ class Agent:
                 continue
             if agent.id in self.received_neighbor_ids:
                 continue
-            if np.linalg.norm(self.get_position() - agent.get_position()) <= constants.COMMUNICATION_RANGE:
-                if agent.get_state() == constants.DISSEMINATION_STATE:
-                    agent_information = agent.opinions
-                    if len(agent_information):
-                        self.social_information.append(agent_information)
-                    if not self.use_fixed_threshold:
-                        self.social_thresholds.append(agent.get_dynamic_threshold())
-                        self.social_decision_flags.append(agent.get_decision() is not None)
-                    self.received_neighbor_ids.add(agent.id)
+            if self.use_laplacian_consensus:
+                if agent.id not in self.fixed_neighbor_ids:
+                    continue
+            else:
+                if np.linalg.norm(self.get_position() - agent.get_position()) > constants.COMMUNICATION_RANGE:
+                    continue
+
+            if not self.use_laplacian_consensus and agent.get_state() != constants.DISSEMINATION_STATE:
+                continue
+
+            agent_information = agent.opinions
+            if len(agent_information):
+                self.social_information.append(agent_information)
+                neighbor_best_hypothesis, _ = agent.get_best_decision_score()
+                self.social_best_hypotheses.append(neighbor_best_hypothesis)
+            if not self.use_fixed_threshold:
+                self.social_thresholds.append(agent.get_dynamic_threshold())
+                self.social_decision_flags.append(agent.get_decision() is not None)
+            if self.use_laplacian_consensus:
+                neighbor_consensus_position = agent.get_consensus_position()
+                neighbor_consensus_confidence = agent.get_consensus_confidence()
+                if neighbor_consensus_position is not None and neighbor_consensus_confidence > 0:
+                    self.social_consensus_positions.append(neighbor_consensus_position)
+                    self.social_consensus_confidences.append(float(neighbor_consensus_confidence))
+                    self.social_consensus_frozen_flags.append(agent.is_laplacian_frozen())
+            self.received_neighbor_ids.add(agent.id)
+
+    def get_filtered_social_information(self):
+        """Return Laplacian-mode social evidence filtered by adjacency of neighbors' best hypotheses."""
+        if not self.use_laplacian_consensus:
+            return self.social_information
+        if len(self.social_information) <= 1:
+            return self.social_information
+
+        valid_entries = [
+            (index, best_hypothesis)
+            for index, best_hypothesis in enumerate(self.social_best_hypotheses)
+            if best_hypothesis is not None
+        ]
+        if len(valid_entries) <= 1:
+            return self.social_information
+
+        kept_indices = set()
+        for left_offset, (left_index, left_hypothesis) in enumerate(valid_entries):
+            for right_index, right_hypothesis in valid_entries[left_offset + 1:]:
+                if self.are_adjacent_hypotheses(left_hypothesis, right_hypothesis):
+                    kept_indices.add(left_index)
+                    kept_indices.add(right_index)
+
+        if not kept_indices:
+            return self.social_information
+
+        return [
+            self.social_information[index]
+            for index in sorted(kept_indices)
+            if index < len(self.social_information)
+        ]
+
+    def are_adjacent_hypotheses(self, first_hypothesis, second_hypothesis):
+        """Return whether two hypothesis tiles are adjacent, including diagonal adjacency."""
+        rows, _ = self.grid_shape
+        first_x = int(first_hypothesis) // rows
+        first_y = int(first_hypothesis) % rows
+        second_x = int(second_hypothesis) // rows
+        second_y = int(second_hypothesis) % rows
+        return max(abs(first_x - second_x), abs(first_y - second_y)) == 1
     
     def calculate_decision(self):
         """Calculate current decision based on opinions.
@@ -622,6 +744,8 @@ class Agent:
         elapsed_time = self.get_elapsed_simulation_time()
         threshold = self.get_current_threshold()
         unique_received_opinion_count = len(self.social_information)
+        consensus_position = self.get_consensus_position()
+        consensus_position_change = self.get_consensus_position_change()
 
         if current_decision is not None and self.first_decision_time is None:
             self.first_decision_time = elapsed_time
@@ -635,9 +759,223 @@ class Agent:
                 "best_score": best_decision_score,
                 "threshold": threshold,
                 "unique_received_opinion_count": unique_received_opinion_count,
+                "consensus_position_x": None if consensus_position is None else float(consensus_position[0]),
+                "consensus_position_y": None if consensus_position is None else float(consensus_position[1]),
+                "consensus_position_change": consensus_position_change,
+                "consensus_confidence": self.get_consensus_confidence(),
+                "consensus_initialized": self.is_consensus_initialized(),
+                "laplacian_frozen": self.is_laplacian_frozen(),
+                "laplacian_done": self.is_laplacian_done(),
                 "decision": current_decision,
             }
         )
+
+    def get_consensus_position(self):
+        """Return the current Laplacian-consensus estimate if initialized."""
+        with self.consensus_locker:
+            if self.consensus_position is None:
+                return None
+            return np.array(self.consensus_position, dtype = np.float32)
+
+    def set_consensus_position(self, value):
+        """Store the current Laplacian-consensus estimate."""
+        with self.consensus_locker:
+            self.consensus_position = np.array(value, dtype = np.float32)
+
+    def is_consensus_initialized(self):
+        """Return whether the consensus state has been initialized."""
+        with self.consensus_locker:
+            return bool(self.consensus_initialized)
+
+    def get_consensus_position_change(self):
+        """Return the latest per-cycle consensus-position change magnitude."""
+        with self.consensus_locker:
+            if self.consensus_position is None or self.previous_consensus_position is None:
+                return None
+            return float(np.linalg.norm(self.consensus_position - self.previous_consensus_position))
+
+    def get_consensus_confidence(self):
+        """Return the local confidence used in Laplacian consensus."""
+        with self.consensus_locker:
+            if self.frozen_consensus_confidence is not None:
+                return float(self.frozen_consensus_confidence)
+        _, best_decision_score = self.get_best_decision_score()
+        return max(0.0, float(best_decision_score))
+
+    def get_consensus_stable_counter(self):
+        """Return the number of consecutive stable consensus cycles."""
+        with self.consensus_locker:
+            return int(self.consensus_stable_counter)
+
+    def is_laplacian_locally_stable(self):
+        """Return whether the consensus position has stabilized locally."""
+        with self.consensus_locker:
+            return bool(
+                self.consensus_initialized
+                and self.consensus_stable_counter >= int(constants.LAPLACIAN_STABLE_CYCLES)
+            )
+
+    def is_laplacian_frozen(self):
+        """Return whether the agent has frozen its evidence state in Laplacian mode."""
+        with self.consensus_locker:
+            return bool(self.laplacian_frozen)
+
+    def is_laplacian_done(self):
+        """Return whether the agent has completed the post-freeze neighbor-agreement phase."""
+        with self.consensus_locker:
+            return bool(self.laplacian_done)
+
+    def freeze_laplacian_state(self):
+        """Freeze movement, sensing, and DS updates while keeping communication and consensus active."""
+        frozen_confidence = self.get_consensus_confidence()
+        with self.consensus_locker:
+            if self.laplacian_frozen:
+                return
+            self.laplacian_frozen = True
+            self.laplacian_done = False
+            self.laplacian_done_counter = 0
+            self.frozen_consensus_confidence = frozen_confidence
+
+    def update_laplacian_done_status(self):
+        """Update the post-freeze completion criterion from neighbor consensus agreement."""
+        with self.consensus_locker:
+            if not self.laplacian_frozen or self.consensus_position is None:
+                self.laplacian_done = False
+                self.laplacian_done_counter = 0
+                return
+
+            frozen_neighbor_positions = [
+                np.asarray(neighbor_position, dtype = np.float32)
+                for neighbor_position, is_frozen in zip(
+                    self.social_consensus_positions,
+                    self.social_consensus_frozen_flags,
+                )
+                if is_frozen
+            ]
+
+            if not frozen_neighbor_positions:
+                self.laplacian_done = False
+                self.laplacian_done_counter = 0
+                return
+
+            current_position = np.array(self.consensus_position, dtype = np.float32)
+            max_neighbor_gap = max(
+                float(np.linalg.norm(neighbor_position - current_position))
+                for neighbor_position in frozen_neighbor_positions
+            )
+            if max_neighbor_gap < float(constants.LAPLACIAN_NEIGHBOR_DELTA):
+                self.laplacian_done_counter += 1
+            else:
+                self.laplacian_done_counter = 0
+
+            self.laplacian_done = self.laplacian_done_counter >= int(constants.LAPLACIAN_DONE_CYCLES)
+
+    def convert_decision_to_tile_center(self, decision):
+        """Convert a tile index to the corresponding full-image tile center."""
+        rows, cols = self.grid_shape
+        subimage_width = self.original_image.shape[1] / cols
+        subimage_height = self.original_image.shape[0] / rows
+        x_index = int(decision) // rows
+        y_index = int(decision) % rows
+        return np.array(
+            [
+                (x_index + 0.5) * subimage_width,
+                (y_index + 0.5) * subimage_height,
+            ],
+            dtype = np.float32,
+        )
+
+    def get_observation_position(self):
+        """Return the local observation-derived tile center of the best hypothesis."""
+        best_hypothesis, _ = self.get_best_decision_score()
+        if best_hypothesis is None:
+            return None
+        return self.convert_decision_to_tile_center(best_hypothesis)
+
+    def update_laplacian_consensus(self):
+        """Update the decentralized confidence-weighted Laplacian consensus estimate."""
+        observation_position = self.get_observation_position()
+        if observation_position is None:
+            return
+
+        local_confidence = self.get_consensus_confidence()
+        if local_confidence <= 0:
+            return
+
+        with self.consensus_locker:
+            if not self.consensus_initialized:
+                self.previous_consensus_position = None
+                self.consensus_position = np.array(observation_position, dtype = np.float32)
+                self.consensus_initialized = True
+                self.consensus_stable_counter = 0
+                return
+
+            current_position = np.array(self.consensus_position, dtype = np.float32)
+            neighbor_shift = np.zeros(2, dtype = np.float32)
+            for neighbor_position, neighbor_confidence in zip(
+                self.social_consensus_positions,
+                self.social_consensus_confidences,
+            ):
+                denominator = local_confidence + float(neighbor_confidence)
+                if denominator <= 0:
+                    continue
+                edge_weight = float(neighbor_confidence) / denominator
+                neighbor_shift += edge_weight * (np.asarray(neighbor_position, dtype = np.float32) - current_position)
+
+            updated_position = (
+                current_position
+                + constants.LAPLACIAN_CONSENSUS_GAIN * neighbor_shift
+                + constants.LAPLACIAN_OBSERVATION_GAIN * (np.asarray(observation_position, dtype = np.float32) - current_position)
+            )
+            position_change = float(np.linalg.norm(updated_position - current_position))
+            self.previous_consensus_position = current_position
+            self.consensus_position = np.array(updated_position, dtype = np.float32)
+            if not self.laplacian_frozen:
+                if position_change < float(constants.LAPLACIAN_POSITION_DELTA):
+                    self.consensus_stable_counter += 1
+                else:
+                    self.consensus_stable_counter = 0
+            else:
+                self.consensus_stable_counter = int(constants.LAPLACIAN_STABLE_CYCLES)
+
+        if not self.is_laplacian_frozen() and self.is_laplacian_locally_stable():
+            self.freeze_laplacian_state()
+        if self.is_laplacian_frozen():
+            self.update_laplacian_done_status()
+
+    def update_frozen_average_consensus(self):
+        """Run Stage-2 weighted average consensus using only frozen neighbors."""
+        if not self.is_laplacian_frozen():
+            return
+
+        current_confidence = max(float(self.get_consensus_confidence()), 1e-9)
+        with self.consensus_locker:
+            if self.consensus_position is None:
+                self.laplacian_done = False
+                self.laplacian_done_counter = 0
+                return
+
+            current_position = np.array(self.consensus_position, dtype = np.float32)
+            frozen_neighbor_positions = [
+                np.asarray(neighbor_position, dtype = np.float32)
+                for neighbor_position, is_frozen in zip(
+                    self.social_consensus_positions,
+                    self.social_consensus_frozen_flags,
+                )
+                if is_frozen
+            ]
+
+            self.previous_consensus_position = current_position.copy()
+            if frozen_neighbor_positions:
+                delta = np.zeros(2, dtype = np.float32)
+                for neighbor_position in frozen_neighbor_positions:
+                    delta += neighbor_position - current_position
+                updated_position = current_position + (
+                    (float(constants.LAPLACIAN_AVERAGE_GAIN) / current_confidence) * delta
+                )
+                self.consensus_position = np.array(updated_position, dtype = np.float32)
+
+        self.update_laplacian_done_status()
 
     def get_dynamic_threshold(self):
         """Get the current decentralized decision threshold."""
