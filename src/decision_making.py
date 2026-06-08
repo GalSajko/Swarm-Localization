@@ -5,16 +5,19 @@ DS_SINGLETON_WEIGHT = 0.5
 DS_MAX_PAIR_FOCAL_SETS = 8
 DS_NEIGHBOR_COMPATIBILITY_GAIN = 1.0
 DS_NEIGHBOR_SAME_TILE_SUPPORT = 1.0
-DS_NEIGHBOR_ADJACENT_TILE_SUPPORT = 0.9
-DS_NEIGHBOR_INCOMPATIBILITY_PENALTY = 0.3
+DS_NEIGHBOR_ADJACENT_TILE_SUPPORT = 0.8
+DS_NEIGHBOR_INCOMPATIBILITY_PENALTY = 0.1
 
 def configure_dempster_shafer(
     top_k = None,
     singleton_weight = None,
     compatibility_gain = None,
+    incompatibility_penalty = None,
+    neighbor_adjacent_tile_support = None,
 ):
     """Update runtime-configurable DS parameters for experiment sweeps."""
     global DS_TOP_K, DS_SINGLETON_WEIGHT, DS_NEIGHBOR_COMPATIBILITY_GAIN
+    global DS_NEIGHBOR_INCOMPATIBILITY_PENALTY, DS_NEIGHBOR_ADJACENT_TILE_SUPPORT
 
     if top_k is not None:
         DS_TOP_K = max(1, int(top_k))
@@ -22,6 +25,10 @@ def configure_dempster_shafer(
         DS_SINGLETON_WEIGHT = float(np.clip(singleton_weight, 0.0, 1.0))
     if compatibility_gain is not None:
         DS_NEIGHBOR_COMPATIBILITY_GAIN = float(max(0.0, compatibility_gain))
+    if incompatibility_penalty is not None:
+        DS_NEIGHBOR_INCOMPATIBILITY_PENALTY = float(np.clip(incompatibility_penalty, 0.0, 1.0))
+    if neighbor_adjacent_tile_support is not None:
+        DS_NEIGHBOR_ADJACENT_TILE_SUPPORT = float(np.clip(neighbor_adjacent_tile_support, 0.0, 1.0))
 
 def dempster_shafer(personal_information, previous_mass, social_masses, theta_set, agent_id = None, use_yager_social_fusion = False):
     """Fuse personal and social evidence using Compatibility boost or Yager's rule.
