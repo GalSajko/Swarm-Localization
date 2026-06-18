@@ -8,12 +8,13 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
+import constants
 
-RESULTS_ROOT = "results/continuous_est"
+RESULTS_ROOT = constants.CONTINUOUS_RESULTS_DIR
 PLOTS_DIR = os.path.join(RESULTS_ROOT, "plots")
 OUTPUT_STEM = os.path.join(PLOTS_DIR, "topk_comp_boost_analysis")
 FIGURE_TITLE = "Effect of Retained Hypothesis Count on Localization Error and Consensus Time"
-TERRAINS = ("city", "desert", "mountains", "rural")
+TERRAINS = constants.TERRAIN_NAMES
 TOPK_VALUES = (1, 2, 4, 8)
 METHOD_KEY = "comp_boost"
 BOX_COLOR = "#4f7ea4"

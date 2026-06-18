@@ -8,12 +8,13 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
+import constants
 
-RESULTS_ROOT = "results/continuous_est"
+RESULTS_ROOT = constants.CONTINUOUS_RESULTS_DIR
 PLOTS_DIR = os.path.join(RESULTS_ROOT, "plots")
 OUTPUT_STEM = os.path.join(PLOTS_DIR, "swarm_size_analysis")
 FIGURE_TITLE = "Effect of Swarm Size on Localization Error and Consensus Time for Compatibility Boost and Yager's Rule"
-TERRAINS = ("city", "desert", "mountains", "rural")
+TERRAINS = constants.TERRAIN_NAMES
 SWARM_SIZES = (2, 4, 9, 12, 16, 20, 25)
 # Per-method visual settings:
 # color and horizontal offset control how far apart the two boxplots are at each swarm-size tick.

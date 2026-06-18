@@ -8,9 +8,14 @@ import numpy as np
 import constants
 import utils
 
-SUBIMAGES_ROOT_DIR = "data/subimages"
-CODEBOOKS_DIR = "codebooks"
 OUTPUT_DIR = "results/task_complexity"
+LOW_FEATURE_THRESHOLD = 20
+TERRAIN_PLOT_COLORS = {
+    "city": "#90a4ae",
+    "desert": "#d7c3a3",
+    "mountains": "#aab7a2",
+    "rural": "#b8cbb8",
+}
 
 plt.rcParams.update({
     "figure.dpi": 300,
@@ -27,11 +32,11 @@ def parse_subimage_indices(filename):
 
 def list_available_terrains():
     terrains = []
-    if not os.path.isdir(SUBIMAGES_ROOT_DIR):
+    if not os.path.isdir(constants.SUBIMAGES_DIR):
         return terrains
 
-    for entry in sorted(os.listdir(SUBIMAGES_ROOT_DIR)):
-        terrain_dir = os.path.join(SUBIMAGES_ROOT_DIR, entry)
+    for entry in sorted(os.listdir(constants.SUBIMAGES_DIR)):
+        terrain_dir = os.path.join(constants.SUBIMAGES_DIR, entry)
         if os.path.isdir(terrain_dir):
             terrains.append(entry)
 
@@ -39,7 +44,7 @@ def list_available_terrains():
 
 
 def load_terrain_subimages(terrain_name):
-    terrain_dir = os.path.join(SUBIMAGES_ROOT_DIR, terrain_name)
+    terrain_dir = os.path.join(constants.SUBIMAGES_DIR, terrain_name)
     filenames = sorted([f for f in os.listdir(terrain_dir) if f.lower().endswith(".png")], key=parse_subimage_indices)
 
     images = []
@@ -76,7 +81,7 @@ def compute_root_sift_keypoint_counts(images):
 
 
 def load_terrain_vlad_vectors(terrain_name):
-    vlad_path = os.path.join(CODEBOOKS_DIR, f"vlad_vectors_{terrain_name}.npy")
+    vlad_path = os.path.join(constants.CODEBOOKS_DIR, f"vlad_vectors_{terrain_name}.npy")
     return np.load(vlad_path)
 
 
@@ -143,6 +148,11 @@ def build_monotony_heatmap(coordinates, grid_shape, nearest_similarity, neighbor
     return heatmap, monotony_score
 
 
+def compute_fraction_below_threshold(values, threshold):
+    values = np.asarray(values, dtype=np.float32)
+    return float(np.mean(values < threshold))
+
+
 def save_heatmap(terrain_name, heatmap):
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -158,6 +168,49 @@ def save_heatmap(terrain_name, heatmap):
     plt.tight_layout()
     plt.savefig(os.path.join(OUTPUT_DIR, f"{terrain_name}_heatmap.png"))
     plt.close()
+
+
+def create_boxplot(metric_values_by_terrain, ylabel, title, output_filename):
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+    metric_values_by_terrain = sorted(
+        metric_values_by_terrain,
+        key=lambda item: float(np.median(item[1])),
+    )
+    terrain_names = [terrain_name for terrain_name, _ in metric_values_by_terrain]
+    metric_values = [values for _, values in metric_values_by_terrain]
+    colors = [TERRAIN_PLOT_COLORS.get(terrain_name, "#b0bec5") for terrain_name in terrain_names]
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    boxplot = ax.boxplot(
+        metric_values,
+        patch_artist=True,
+        whis=1.5,
+        tick_labels=[terrain_name.capitalize() for terrain_name in terrain_names],
+        flierprops={
+            "marker": "o",
+            "markersize": 4,
+            "markerfacecolor": "#5f6b73",
+            "markeredgecolor": "#5f6b73",
+            "alpha": 0.55,
+        },
+        medianprops={"color": "#37474f", "linewidth": 1.5},
+        whiskerprops={"color": "#78909c", "linewidth": 1.0},
+        capprops={"color": "#78909c", "linewidth": 1.0},
+        boxprops={"edgecolor": "#78909c", "linewidth": 1.0},
+    )
+
+    for patch, color in zip(boxplot["boxes"], colors):
+        patch.set_facecolor(color)
+        patch.set_alpha(0.75)
+
+    ax.set_title(title)
+    ax.set_ylabel(ylabel)
+    ax.set_xlabel("Terrain")
+    ax.grid(axis="y", linestyle=":", linewidth=0.4, color="#cfd8dc")
+    fig.tight_layout()
+    fig.savefig(os.path.join(OUTPUT_DIR, output_filename))
+    plt.close(fig)
 
 
 def compute_raw_terrain_metrics(terrain_name):
@@ -186,11 +239,17 @@ def compute_raw_terrain_metrics(terrain_name):
         "grid_rows": grid_shape[0],
         "grid_cols": grid_shape[1],
         "mean_nearest_nonself_similarity": float(np.mean(nearest_similarity)),
+        "median_nearest_nonself_similarity": float(np.median(nearest_similarity)),
         "mean_neighbor_similarity": float(np.mean(neighbor_similarity)),
         "mean_keypoint_count": float(np.mean(keypoint_counts)),
+        "median_keypoint_count": float(np.median(keypoint_counts)),
+        "zero_feature_fraction": compute_fraction_below_threshold(keypoint_counts, 1),
+        "low_feature_fraction": compute_fraction_below_threshold(keypoint_counts, LOW_FEATURE_THRESHOLD),
         "mean_monotony_score": float(np.nanmean(heatmap)),
         "heatmap": heatmap,
         "monotony_score": monotony_score,
+        "nearest_similarity_values": nearest_similarity,
+        "keypoint_count_values": keypoint_counts,
     }
 
     return metrics
@@ -227,8 +286,12 @@ def save_summary(metrics_per_terrain):
         "grid_rows",
         "grid_cols",
         "mean_nearest_nonself_similarity",
+        "median_nearest_nonself_similarity",
         "mean_neighbor_similarity",
         "mean_keypoint_count",
+        "median_keypoint_count",
+        "zero_feature_fraction",
+        "low_feature_fraction",
         "mean_monotony_score",
         "repetitiveness_component",
         "local_ambiguity_component",
@@ -254,14 +317,38 @@ def main():
     for metrics in metrics_per_terrain:
         save_heatmap(metrics["terrain"], metrics["heatmap"])
 
+    create_boxplot(
+        [
+            (metrics["terrain"], metrics["nearest_similarity_values"])
+            for metrics in metrics_per_terrain
+        ],
+        ylabel="Nearest Non-self VLAD Cosine Similarity",
+        title="Nearest Non-self Similarity by Terrain",
+        output_filename="nearest_nonself_similarity_boxplot.png",
+    )
+    create_boxplot(
+        [
+            (metrics["terrain"], metrics["keypoint_count_values"])
+            for metrics in metrics_per_terrain
+        ],
+        ylabel="RootSIFT Feature Count per Subimage",
+        title=f"Feature Count by Terrain (low-feature threshold = {LOW_FEATURE_THRESHOLD})",
+        output_filename="feature_count_boxplot.png",
+    )
+
     save_summary(metrics_per_terrain)
 
     for metrics in sorted(metrics_per_terrain, key=lambda item: item["task_complexity"], reverse=True):
         print(
-            f"{metrics['terrain']}: complexity={metrics['task_complexity']:.3f}, "
-            f"nearest_nonself={metrics['mean_nearest_nonself_similarity']:.3f}, "
-            f"neighbor_similarity={metrics['mean_neighbor_similarity']:.3f}, "
-            f"mean_keypoints={metrics['mean_keypoint_count']:.1f}"
+            f"Terrain: {metrics['terrain']}\n"
+            f"  Subimages analyzed: {metrics['num_subimages']} ({metrics['grid_rows']}x{metrics['grid_cols']} grid)\n"
+            f"  Median nearest non-self VLAD cosine similarity: {metrics['median_nearest_nonself_similarity']:.3f}\n"
+            f"  Mean nearest non-self VLAD cosine similarity: {metrics['mean_nearest_nonself_similarity']:.3f}\n"
+            f"  Median RootSIFT feature count per subimage: {metrics['median_keypoint_count']:.1f}\n"
+            f"  Mean RootSIFT feature count per subimage: {metrics['mean_keypoint_count']:.1f}\n"
+            f"  Fraction of zero-feature tiles: {metrics['zero_feature_fraction']:.3f} ({metrics['zero_feature_fraction'] * 100:.1f}%)\n"
+            f"  Fraction of low-feature tiles (< {LOW_FEATURE_THRESHOLD} features): "
+            f"{metrics['low_feature_fraction']:.3f} ({metrics['low_feature_fraction'] * 100:.1f}%)\n"
         )
 
 

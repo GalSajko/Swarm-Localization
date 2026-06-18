@@ -8,12 +8,13 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
+import constants
 
-RESULTS_ROOT = "results/continuous_est"
+RESULTS_ROOT = constants.CONTINUOUS_RESULTS_DIR
 PLOTS_DIR = os.path.join(RESULTS_ROOT, "plots")
 OUTPUT_STEM = os.path.join(PLOTS_DIR, "social_fusion_rule_comparison")
 SWARM_SIZE = 12
-TERRAINS = ("city", "desert", "mountains", "rural")
+TERRAINS = constants.TERRAIN_NAMES
 METHODS = (
     ("comp_boost", "Compatibility boost", "#1f4e79", -0.05),
     ("yager", "Yager's rule", "#c04b32", 0.05),

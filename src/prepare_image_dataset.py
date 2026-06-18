@@ -15,18 +15,8 @@ import constants
 import utils
 
 #region DATASET PREPARATION
-ORIGINAL_IMAGES_DIR = 'data/original_images/'
-SUBIMAGES_DIR = 'data/subimages/'
 COLORED_SATELITE_IMAGE_NAME = 'colored_satelite_image.png'
 BW_SATELITE_IMAGE_NAME = 'bw_satelite_image.png'
-SUBIMAGE_GRID_SIZE = (20, 20)
-
-TERRAIN_IMAGE_NAMES = {
-    'city': 'city_bw.png',
-    'desert': 'desert_bw.png',
-    'mountains': 'mountains_bw.png',
-    'rural': 'rural_bw.png',
-}
 
 TRAINING_DATASET = 'training_data/ims_gray.npy'
 
@@ -49,7 +39,7 @@ def convert_image_to_bw_and_save(original_image_path, original_image_name, path_
     
     cv2.imwrite(path_to_save + BW_SATELITE_IMAGE_NAME, bw_image)
 
-def divide_image_on_subimages_and_save(image, divide_on, subimages_dir = SUBIMAGES_DIR, remove_old_files = True):
+def divide_image_on_subimages_and_save(image, divide_on, subimages_dir = constants.SUBIMAGES_DIR, remove_old_files = True):
     """Divide original image on desired number of subimages and save them in subimages directory.
 
     Args:
@@ -202,8 +192,8 @@ def map_descriptors_to_centroids(descriptors, centroids):
 #endregion
 
 #region VLAD
-VLAD_VECTORS_NPY = 'codebooks/vlad_vectors.npy'
-TRAINED_CENTROIDS_NPY = 'codebooks/trained_centroids.npy'
+VLAD_VECTORS_NPY = constants.DEFAULT_VLAD_VECTORS_PATH
+TRAINED_CENTROIDS_NPY = constants.TRAINED_CENTROIDS_PATH
 
 def calculate_vlad_vectors(descriptors, mapped_descriptors, centroids, normalize = True):
     """Calculate vlad descriptors for all images.
@@ -300,24 +290,24 @@ def prepare_and_save_vlad_codebook(training_set, testing_set, training = False):
 #endregion
 
 def get_terrain_subimages_dir(terrain_name):
-    return os.path.join(SUBIMAGES_DIR, terrain_name)
+    return os.path.join(constants.SUBIMAGES_DIR, terrain_name)
 
 def get_terrain_vlad_vectors_path(terrain_name):
-    return os.path.join('codebooks', f'vlad_vectors_{terrain_name}.npy')
+    return os.path.join(constants.CODEBOOKS_DIR, f'vlad_vectors_{terrain_name}.npy')
 
 def prepare_terrain_subimages_and_codebooks():
     """Prepare terrain-specific subimages and VLAD vectors using existing trained centroids."""
     centroids = np.load(TRAINED_CENTROIDS_NPY)
 
-    for terrain_name, image_name in TERRAIN_IMAGE_NAMES.items():
-        image_path = os.path.join(ORIGINAL_IMAGES_DIR, image_name)
+    for terrain_name, image_name in constants.TERRAIN_IMAGE_NAMES.items():
+        image_path = os.path.join(constants.ORIGINAL_IMAGES_DIR, image_name)
         image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
         if image is None:
             print(f"Skipping terrain '{terrain_name}', image not found: {image_path}")
             continue
 
         terrain_subimages_dir = get_terrain_subimages_dir(terrain_name)
-        divide_image_on_subimages_and_save(image, SUBIMAGE_GRID_SIZE, terrain_subimages_dir, True)
+        divide_image_on_subimages_and_save(image, constants.SUBIMAGE_GRID_SIZE, terrain_subimages_dir, True)
 
         testing_set = get_dict_of_dataset_images(terrain_subimages_dir + os.sep)
         _, descriptors = root_sift_visual_features(list(testing_set.values()))
