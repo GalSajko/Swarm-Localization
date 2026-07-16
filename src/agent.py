@@ -44,7 +44,7 @@ class Agent:
         search_bounds = None,
         use_fixed_threshold = False,
         social_fusion_rule = "comp_boost",
-        personal_fusion_rule = "yager",
+        personal_fusion_rule = "dempster",
         fixed_neighbor_ids = None,
         grid_matrix = None,
         threshold_value = None,
@@ -591,7 +591,8 @@ class Agent:
         if not self.is_continuous_frozen():
             previous_ranked_hypotheses = self.get_ranked_hypotheses_from_current_scores(max_rank = 4)
             self.update_personal_information_from_visual_buffer()
-            social_information, social_neighbor_ids = self.get_filtered_social_information()
+            social_information = self.social_information
+            social_neighbor_ids = self.social_information_neighbor_ids
             effective_personal_fusion_rule = self.resolve_personal_fusion_rule()
             self.opinions, self.ds_scores, selected_personal_fusion_rule = dm.dempster_shafer(
                 self.get_personal_information(),
@@ -727,47 +728,6 @@ class Agent:
                 self.social_consensus_frozen_flags.append(True)
             self.received_neighbor_ids.add(agent.id)
 
-    def get_filtered_social_information(self):
-        """Return social evidence filtered by adjacency of neighbors' best hypotheses."""
-        if len(self.social_information) <= 1:
-            return self.social_information, self.social_information_neighbor_ids
-
-        valid_entries = [
-            (index, best_hypothesis)
-            for index, best_hypothesis in enumerate(self.social_best_hypotheses)
-            if best_hypothesis is not None
-        ]
-        if len(valid_entries) <= 1:
-            return self.social_information, self.social_information_neighbor_ids
-
-        kept_indices = set()
-        for left_offset, (left_index, left_hypothesis) in enumerate(valid_entries):
-            for right_index, right_hypothesis in valid_entries[left_offset + 1:]:
-                if self.are_adjacent_hypotheses(left_hypothesis, right_hypothesis):
-                    kept_indices.add(left_index)
-                    kept_indices.add(right_index)
-
-        if not kept_indices:
-            return self.social_information, self.social_information_neighbor_ids
-
-        filtered_masses = []
-        filtered_neighbor_ids = []
-        for index in sorted(kept_indices):
-            if index < len(self.social_information):
-                filtered_masses.append(self.social_information[index])
-                if index < len(self.social_information_neighbor_ids):
-                    filtered_neighbor_ids.append(self.social_information_neighbor_ids[index])
-        return filtered_masses, filtered_neighbor_ids
-
-    def are_adjacent_hypotheses(self, first_hypothesis, second_hypothesis):
-        """Return whether two hypothesis tiles are adjacent, including diagonal adjacency."""
-        rows, _ = self.grid_shape
-        first_x = int(first_hypothesis) // rows
-        first_y = int(first_hypothesis) % rows
-        second_x = int(second_hypothesis) // rows
-        second_y = int(second_hypothesis) % rows
-        return max(abs(first_x - second_x), abs(first_y - second_y)) == 1
-    
     def calculate_decision(self):
         """Calculate current decision based on opinions.
 

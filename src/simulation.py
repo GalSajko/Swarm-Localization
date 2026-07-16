@@ -18,6 +18,10 @@ SIMULATION_SPEED_UP_FACTOR = 5.0
 SIMULATION_LOOP_PERIOD = 0.01
 
 RESULTS_DIR = "results/continuous_est_resetting_vlad"
+PERSONAL_FUSION_RESULTS_DIR = "results/personal_fusion"
+SOCIAL_FUSION_RESULTS_DIR = "results/social_fusion"
+DECISION_THRESHOLD_RESULTS_DIR = "results/decision_threshold"
+SWARM_SIZE_RESULTS_DIR = "results/swarm_size"
 TERRAIN_FLAGS = {
     "--city": "city",
     "--desert": "desert",
@@ -99,32 +103,88 @@ def parse_required_choice_argument(raw_extra_args, prefix, valid_choices):
         raise ValueError(f"Invalid value '{value}' for {prefix}. Expected one of: {', '.join(valid_choices)}")
     return value
 
+def parse_optional_int_argument(raw_extra_args, prefix, default_value = None, minimum = None):
+    """Extract one optional integer CLI argument and validate it."""
+    value = None
+    for argument in raw_extra_args:
+        if argument.startswith(prefix):
+            value = argument.split("=", 1)[1]
+            break
+    if value is None:
+        return default_value
+    try:
+        parsed_value = int(value)
+    except ValueError as error:
+        raise ValueError(f"Invalid integer value '{value}' for {prefix}.") from error
+    if minimum is not None and parsed_value < minimum:
+        raise ValueError(f"Invalid value '{value}' for {prefix}. Expected an integer >= {minimum}.")
+    return parsed_value
+
+def parse_optional_float_argument(raw_extra_args, prefix, default_value = None, minimum = None, maximum = None):
+    """Extract one optional float CLI argument and validate it."""
+    value = None
+    for argument in raw_extra_args:
+        if argument.startswith(prefix):
+            value = argument.split("=", 1)[1]
+            break
+    if value is None:
+        return default_value
+    try:
+        parsed_value = float(value)
+    except ValueError as error:
+        raise ValueError(f"Invalid float value '{value}' for {prefix}.") from error
+    if minimum is not None and parsed_value < minimum:
+        raise ValueError(f"Invalid value '{value}' for {prefix}. Expected a float >= {minimum}.")
+    if maximum is not None and parsed_value > maximum:
+        raise ValueError(f"Invalid value '{value}' for {prefix}. Expected a float <= {maximum}.")
+    return parsed_value
+
 def build_results_paths(experiment_name):
-    """Build output CSV paths inside the appropriate results/continuous_est category."""
+    """Build output CSV paths using the experiment-family directories from experiments_readme.md."""
     experiment_stem = os.path.splitext(os.path.basename(experiment_name))[0]
-    if experiment_stem.startswith("swarm_size"):
-        category_dir = "swarm_size"
-    elif experiment_stem.startswith("decision_threshold") or experiment_stem.startswith("threshold_"):
-        category_dir = "decision_threshold"
+    personal_fusion_named_sets = {
+        "personal_fusion_rules_sweep",
+        "personal_fusion_rules_sweep_disabled_social",
+        "mass_function_mode_sweep",
+        "topk_neighbors_sweep",
+        "singleton_weight_sweep",
+    }
+    social_fusion_named_sets = {
+        "social_fusion_rules_sweep",
+        "compatibility_gain_sweep",
+        "compatibility_gain_incompatibility_penalty_sweep",
+        "same_and_adjacent_tile_support_sweep",
+        "incompatibility_penalty_sweep",
+    }
+    if experiment_stem in personal_fusion_named_sets:
+        experiment_dir = os.path.join(PERSONAL_FUSION_RESULTS_DIR, experiment_stem)
+    elif experiment_stem in social_fusion_named_sets:
+        experiment_dir = os.path.join(SOCIAL_FUSION_RESULTS_DIR, experiment_stem)
+    elif experiment_stem == "decision_threshold" or experiment_stem.startswith("threshold_"):
+        experiment_dir = os.path.join(DECISION_THRESHOLD_RESULTS_DIR, experiment_stem)
+    elif experiment_stem == "swarm_size":
+        experiment_dir = os.path.join(SWARM_SIZE_RESULTS_DIR, experiment_stem)
+    elif experiment_stem.startswith("social_fusion_"):
+        experiment_stem = experiment_stem.removeprefix("social_fusion_")
+        experiment_dir = os.path.join(SOCIAL_FUSION_RESULTS_DIR, experiment_stem)
     elif experiment_stem.startswith("personal_fusion_"):
-        category_dir = "personal_fusion"
         experiment_stem = experiment_stem.removeprefix("personal_fusion_")
+        experiment_dir = os.path.join(PERSONAL_FUSION_RESULTS_DIR, experiment_stem)
     elif experiment_stem.startswith("personal_fusion_test_"):
-        category_dir = "personal_fusion_test"
         experiment_stem = experiment_stem.removeprefix("personal_fusion_test_")
+        experiment_dir = os.path.join("results/personal_fusion_test", experiment_stem)
     elif experiment_stem.startswith("continuous"):
-        category_dir = "continuous"
+        experiment_dir = os.path.join(RESULTS_DIR, "continuous", experiment_stem)
     elif (
         experiment_stem.startswith("social_fusion")
         or experiment_stem.startswith("compatibility_gain")
         or experiment_stem.startswith("incompatibility_penalty")
         or experiment_stem.startswith("neighbor_adjacent_tile_support")
     ):
-        category_dir = "social_fusion"
+        experiment_dir = os.path.join(SOCIAL_FUSION_RESULTS_DIR, experiment_stem)
     else:
-        category_dir = "top_k_ds"
+        experiment_dir = os.path.join(RESULTS_DIR, "top_k_ds", experiment_stem)
 
-    experiment_dir = os.path.join(RESULTS_DIR, category_dir, experiment_stem)
     return {
         "trial_summary": os.path.join(experiment_dir, "trial_summary.csv"),
         "agent_final_states": os.path.join(experiment_dir, "agent_final_states.csv"),
@@ -944,6 +1004,92 @@ def convert_decision_index_to_subimage_name(decision, image_shape):
         return f"{x_index + 1:02d}_{y_index + 1:02d}"
     return f"{x_index + 1:02d}_{y_index + 1:02d}"
 
+def convert_decision_index_to_tile_center(decision, image_shape):
+    """Return the center position of one terrain tile decision in image coordinates."""
+    subimage_width = image_shape[1] / constants.SUBIMAGE_GRID_SIZE[0]
+    subimage_height = image_shape[0] / constants.SUBIMAGE_GRID_SIZE[1]
+    x_index = min(
+        int((decision % (constants.SUBIMAGE_GRID_SIZE[1] * constants.SUBIMAGE_GRID_SIZE[0])) // constants.SUBIMAGE_GRID_SIZE[1]),
+        constants.SUBIMAGE_GRID_SIZE[0] - 1,
+    )
+    y_index = min(int(decision % constants.SUBIMAGE_GRID_SIZE[1]), constants.SUBIMAGE_GRID_SIZE[1] - 1)
+    return np.array(
+        [
+            (x_index + 0.5) * subimage_width,
+            (y_index + 0.5) * subimage_height,
+        ],
+        dtype = np.float32,
+    )
+
+def calculate_stage1_decision_dispersion_metrics(decisions, image_shape):
+    """Return spatial dispersion and cluster structure metrics for final Stage-1 decisions."""
+    valid_decisions = [int(decision) for decision in decisions if decision is not None]
+    if len(valid_decisions) <= 1:
+        if not valid_decisions:
+            return None, 0, None
+        return 0.0, 1, 1.0
+
+    decision_positions = np.asarray(
+        [convert_decision_index_to_tile_center(decision, image_shape) for decision in valid_decisions],
+        dtype = np.float32,
+    )
+    pairwise_distances_meters = []
+    for left_index in range(len(decision_positions)):
+        deltas = decision_positions[left_index + 1:] - decision_positions[left_index]
+        if len(deltas):
+            pairwise_distances_meters.extend(
+                (np.linalg.norm(deltas, axis = 1) * METERS_PER_PIXEL).tolist()
+            )
+    mean_pairwise_distance_meters = (
+        None if not pairwise_distances_meters else float(np.mean(pairwise_distances_meters, dtype = np.float32))
+    )
+
+    decision_counts = {}
+    for decision in valid_decisions:
+        decision_counts[decision] = decision_counts.get(decision, 0) + 1
+
+    unique_decisions = sorted(decision_counts)
+    decision_components = []
+    visited_decisions = set()
+    rows = constants.SUBIMAGE_GRID_SIZE[1]
+
+    def are_adjacent_decisions(left_decision, right_decision):
+        left_x = int(left_decision) // rows
+        left_y = int(left_decision) % rows
+        right_x = int(right_decision) // rows
+        right_y = int(right_decision) % rows
+        return max(abs(left_x - right_x), abs(left_y - right_y)) <= 1
+
+    for decision in unique_decisions:
+        if decision in visited_decisions:
+            continue
+        stack = [decision]
+        component_decisions = set()
+        component_agent_count = 0
+        visited_decisions.add(decision)
+        while stack:
+            current_decision = stack.pop()
+            component_decisions.add(current_decision)
+            component_agent_count += decision_counts[current_decision]
+            for neighbor_decision in unique_decisions:
+                if neighbor_decision in visited_decisions:
+                    continue
+                if are_adjacent_decisions(current_decision, neighbor_decision):
+                    visited_decisions.add(neighbor_decision)
+                    stack.append(neighbor_decision)
+        decision_components.append((component_decisions, component_agent_count))
+
+    number_of_connected_decision_clusters = len(decision_components)
+    largest_cluster_share = float(
+        max(component_agent_count for _, component_agent_count in decision_components) / len(valid_decisions)
+    )
+
+    return (
+        mean_pairwise_distance_meters,
+        number_of_connected_decision_clusters,
+        largest_cluster_share,
+    )
+
 def format_final_decision_scores(decision_scores, image_shape):
     """Format final decision-tile scores for terminal output."""
     formatted_scores = []
@@ -1102,6 +1248,10 @@ def experiment(
             position_error_meters = calculate_position_error_meters(initial_position, final_position)
             number_of_different_final_decisions = len({decision for decision in decisions if decision is not None})
             number_of_final_candidate_tiles = len(final_decision_tiles)
+            stage1_mean_pairwise_decision_distance_meters, stage1_number_of_connected_decision_clusters, stage1_largest_cluster_share = calculate_stage1_decision_dispersion_metrics(
+                decisions,
+                test_image.shape,
+            )
             all_received_opinion_counts = [
                 snapshot["unique_received_opinion_count"]
                 for agent in agents
@@ -1171,6 +1321,9 @@ def experiment(
                 "subarea_tile_size_square_meters": subarea_tile_size_square_meters,
                 "number_of_different_final_decisions": number_of_different_final_decisions,
                 "number_of_final_candidate_tiles": number_of_final_candidate_tiles,
+                "stage1_mean_pairwise_decision_distance_meters": stage1_mean_pairwise_decision_distance_meters,
+                "stage1_number_of_connected_decision_clusters": stage1_number_of_connected_decision_clusters,
+                "stage1_largest_cluster_share": stage1_largest_cluster_share,
                 "timeout_reached": timeout_reached,
                 "first_decided_time": first_decided_time,
                 "half_decided_time": half_decided_time,
@@ -1200,6 +1353,7 @@ def main(
     threshold_type,
     social_fusion_rule = "comp_boost",
     visualize = False,
+    trials = None,
 ):
     """Main experiment entry.
 
@@ -1211,22 +1365,33 @@ def main(
     if constants.NUMBER_OF_AGENTS % 2 != 0 and not is_perfect_square:
         raise ValueError("Grid-search requires an even number of agents or a perfect square swarm size.")
 
+    social_fusion_type = social_fusion_rule
     results_experiment_name = experiment_name
     if experiment_name == "personal_fusion":
         results_experiment_name = f"{experiment_name}_{personal_fusion_rule}"
+    elif experiment_name == "social_fusion":
+        results_experiment_name = f"{experiment_name}_{social_fusion_type}"
     results_paths = build_results_paths(results_experiment_name)
     use_fixed_threshold = threshold_type == "fixed"
-    social_fusion_type = social_fusion_rule
+    effective_social_fusion_rule = social_fusion_rule
+    if social_fusion_rule == "disabled":
+        dm.configure_dempster_shafer(
+            compatibility_gain = 0.0,
+            incompatibility_penalty = 1.0,
+        )
+        effective_social_fusion_rule = "comp_boost"
     consensus_method = "continuous_two_stage"
     communication_mode = f"fixed_ring_neighbors_{constants.COMMUNICATION_RING_RANGE}"
 
-    for trial in range(NUMBER_OF_TRIALS):
+    trial_count = NUMBER_OF_TRIALS if trials is None else max(1, int(trials))
+
+    for trial in range(trial_count):
         absolute_trial_index = trial
         trial_summary, agents, image_shape, consensus_dispersion_history = experiment(
             absolute_trial_index,
             terrain,
             personal_fusion_rule,
-            social_fusion_rule,
+            effective_social_fusion_rule,
             use_fixed_threshold,
             visualize,
         )
@@ -1239,14 +1404,17 @@ def main(
             constants.DS_DECISION_THRESHOLD,
             social_fusion_type,
             personal_fusion_rule,
+            dm.DS_MASS_FUNCTION_MODE,
             consensus_method,
             communication_mode,
             constants.COMMUNICATION_RING_RANGE,
             constants.DS_THRESHOLD_MIN,
             constants.DS_THRESHOLD_MAX,
             dm.DS_TOP_K,
+            dm.DS_MAX_NEIGHBORS,
             dm.DS_SINGLETON_WEIGHT,
             dm.DS_NEIGHBOR_COMPATIBILITY_GAIN,
+            dm.DS_NEIGHBOR_SAME_TILE_SUPPORT,
             dm.DS_NEIGHBOR_INCOMPATIBILITY_PENALTY,
             dm.DS_NEIGHBOR_ADJACENT_TILE_SUPPORT,
             trial_summary["target_tile_index"],
@@ -1263,6 +1431,9 @@ def main(
             trial_summary["subarea_tile_size_square_meters"],
             trial_summary["number_of_different_final_decisions"],
             trial_summary["number_of_final_candidate_tiles"],
+            trial_summary["stage1_mean_pairwise_decision_distance_meters"],
+            trial_summary["stage1_number_of_connected_decision_clusters"],
+            trial_summary["stage1_largest_cluster_share"],
             trial_summary["timeout_reached"],
             trial_summary["decided_agent_count"],
             trial_summary["first_decided_time"],
@@ -1287,14 +1458,17 @@ def main(
             "threshold_value",
             "social_fusion_type",
             "personal_fusion_type",
+            "mass_function_type",
             "consensus_method",
             "communication_mode",
             "communication_ring_range",
             "threshold_min",
             "threshold_max",
             "top_k",
+            "max_neighbors",
             "singleton_weight",
             "compatibility_gain",
+            "same_tile_support",
             "incompatibility_penalty",
             "neighbor_adjacent_tile_support",
             "target_tile_index",
@@ -1311,6 +1485,9 @@ def main(
             "subarea_tile_size_square_meters",
             "number_of_different_final_decisions",
             "number_of_final_candidate_tiles",
+            "stage1_mean_pairwise_decision_distance_meters",
+            "stage1_number_of_connected_decision_clusters",
+            "stage1_largest_cluster_share",
             "timeout_reached",
             "decided_agent_count",
             "first_decided_time",
@@ -1344,6 +1521,7 @@ def main(
                 constants.DS_DECISION_THRESHOLD,
                 social_fusion_type,
                 personal_fusion_rule,
+                dm.DS_MASS_FUNCTION_MODE,
                 consensus_method,
                 communication_mode,
                 constants.COMMUNICATION_RING_RANGE,
@@ -1355,8 +1533,10 @@ def main(
                 best_score,
                 agent.get_current_threshold(),
                 dm.DS_TOP_K,
+                dm.DS_MAX_NEIGHBORS,
                 dm.DS_SINGLETON_WEIGHT,
                 dm.DS_NEIGHBOR_COMPATIBILITY_GAIN,
+                dm.DS_NEIGHBOR_SAME_TILE_SUPPORT,
                 dm.DS_NEIGHBOR_INCOMPATIBILITY_PENALTY,
                 dm.DS_NEIGHBOR_ADJACENT_TILE_SUPPORT,
                 format_focal_set_label(best_focal_set, image_shape),
@@ -1379,6 +1559,7 @@ def main(
                 "threshold_value",
                 "social_fusion_type",
                 "personal_fusion_type",
+                "mass_function_type",
                 "consensus_method",
                 "communication_mode",
                 "communication_ring_range",
@@ -1390,8 +1571,10 @@ def main(
                 "best_decision_score",
                 "final_threshold",
                 "top_k",
+                "max_neighbors",
                 "singleton_weight",
                 "compatibility_gain",
+                "same_tile_support",
                 "incompatibility_penalty",
                 "neighbor_adjacent_tile_support",
                 "best_focal_set",
@@ -1417,12 +1600,15 @@ def main(
                     constants.DS_DECISION_THRESHOLD,
                     social_fusion_type,
                     personal_fusion_rule,
+                    dm.DS_MASS_FUNCTION_MODE,
                     consensus_method,
                     communication_mode,
                     constants.COMMUNICATION_RING_RANGE,
                     dm.DS_TOP_K,
+                    dm.DS_MAX_NEIGHBORS,
                     dm.DS_SINGLETON_WEIGHT,
                     dm.DS_NEIGHBOR_COMPATIBILITY_GAIN,
+                    dm.DS_NEIGHBOR_SAME_TILE_SUPPORT,
                     dm.DS_NEIGHBOR_INCOMPATIBILITY_PENALTY,
                     dm.DS_NEIGHBOR_ADJACENT_TILE_SUPPORT,
                     agent.id,
@@ -1453,12 +1639,15 @@ def main(
                     "threshold_value",
                     "social_fusion_type",
                     "personal_fusion_type",
+                    "mass_function_type",
                     "consensus_method",
                     "communication_mode",
                     "communication_ring_range",
                     "top_k",
+                    "max_neighbors",
                     "singleton_weight",
                     "compatibility_gain",
+                    "same_tile_support",
                     "incompatibility_penalty",
                     "neighbor_adjacent_tile_support",
                     "agent_id",
@@ -1492,12 +1681,15 @@ def main(
                 constants.DS_DECISION_THRESHOLD,
                 social_fusion_type,
                 personal_fusion_rule,
+                dm.DS_MASS_FUNCTION_MODE,
                 consensus_method,
                 communication_mode,
                 constants.COMMUNICATION_RING_RANGE,
                 dm.DS_TOP_K,
+                dm.DS_MAX_NEIGHBORS,
                 dm.DS_SINGLETON_WEIGHT,
                 dm.DS_NEIGHBOR_COMPATIBILITY_GAIN,
+                dm.DS_NEIGHBOR_SAME_TILE_SUPPORT,
                 dm.DS_NEIGHBOR_INCOMPATIBILITY_PENALTY,
                 dm.DS_NEIGHBOR_ADJACENT_TILE_SUPPORT,
                 snapshot["cycle_index"],
@@ -1521,12 +1713,15 @@ def main(
                 "threshold_value",
                 "social_fusion_type",
                 "personal_fusion_type",
+                "mass_function_type",
                 "consensus_method",
                 "communication_mode",
                 "communication_ring_range",
                 "top_k",
+                "max_neighbors",
                 "singleton_weight",
                 "compatibility_gain",
+                "same_tile_support",
                 "incompatibility_penalty",
                 "neighbor_adjacent_tile_support",
                 "cycle_index",
@@ -1557,13 +1752,29 @@ if __name__ == "__main__":
         and argument != "--visualize"
         and not argument.startswith("--social_fusion=")
         and not argument.startswith("--personal_fusion=")
+        and not argument.startswith("--mass_function=")
         and not argument.startswith("--threshold_type=")
+        and not argument.startswith("--trials=")
+        and not argument.startswith("--swarm_size=")
+        and not argument.startswith("--ds_decision_threshold=")
+        and not argument.startswith("--ds_top_k=")
+        and not argument.startswith("--ds_max_neighbors=")
+        and not argument.startswith("--ds_singleton_weight=")
+        and not argument.startswith("--ds_neighbor_compatibility_gain=")
+        and not argument.startswith("--ds_neighbor_same_tile_support=")
+        and not argument.startswith("--ds_neighbor_adjacent_tile_support=")
+        and not argument.startswith("--ds_neighbor_incompatibility_penalty=")
     ]
     if invalid_flags:
         print(
             "Unsupported CLI flags: "
             + ", ".join(invalid_flags)
-            + ". Only terrain flags, --visualize, and required --threshold_type=fixed|dynamic, --social_fusion=comp_boost|comp_boost_directed|yager, and --personal_fusion=adaptive|dempster|hybrid|yager are supported."
+            + ". Supported flags are terrain flags, --visualize, required --threshold_type=fixed|dynamic, "
+            + "--social_fusion=comp_boost|comp_boost_directed|disabled|yager, --personal_fusion=adaptive|dempster|hybrid|yager, "
+            + "optional --mass_function=spatial_topk|topk, "
+            + "and optional --trials=, --swarm_size=, --ds_decision_threshold=, --ds_top_k=, --ds_max_neighbors=, "
+            + "--ds_singleton_weight=, --ds_neighbor_compatibility_gain=, --ds_neighbor_same_tile_support=, "
+            + "--ds_neighbor_adjacent_tile_support=, --ds_neighbor_incompatibility_penalty=."
         )
         sys.exit(1)
 
@@ -1578,13 +1789,29 @@ if __name__ == "__main__":
         social_fusion = parse_required_choice_argument(
             raw_extra_args,
             "--social_fusion=",
-            ("comp_boost", "comp_boost_directed", "yager"),
+            ("comp_boost", "comp_boost_directed", "disabled", "yager"),
         )
         personal_fusion_rule = parse_required_choice_argument(
             raw_extra_args,
             "--personal_fusion=",
             ("adaptive", "dempster", "hybrid", "yager"),
         )
+        mass_function_type = parse_choice_argument(
+            raw_extra_args,
+            "--mass_function=",
+            ("spatial_topk", "topk"),
+            dm.DS_MASS_FUNCTION_MODE,
+        )
+        trials = parse_optional_int_argument(raw_extra_args, "--trials=", default_value = NUMBER_OF_TRIALS, minimum = 1)
+        swarm_size = parse_optional_int_argument(raw_extra_args, "--swarm_size=", default_value = constants.NUMBER_OF_AGENTS, minimum = 1)
+        decision_threshold = parse_optional_float_argument(raw_extra_args, "--ds_decision_threshold=", default_value = constants.DS_DECISION_THRESHOLD, minimum = 0.0)
+        ds_top_k = parse_optional_int_argument(raw_extra_args, "--ds_top_k=", default_value = dm.DS_TOP_K, minimum = 1)
+        ds_max_neighbors = parse_optional_int_argument(raw_extra_args, "--ds_max_neighbors=", default_value = dm.DS_MAX_NEIGHBORS, minimum = 0)
+        ds_singleton_weight = parse_optional_float_argument(raw_extra_args, "--ds_singleton_weight=", default_value = dm.DS_SINGLETON_WEIGHT, minimum = 0.0, maximum = 1.0)
+        compatibility_gain = parse_optional_float_argument(raw_extra_args, "--ds_neighbor_compatibility_gain=", default_value = dm.DS_NEIGHBOR_COMPATIBILITY_GAIN, minimum = 0.0)
+        same_tile_support = parse_optional_float_argument(raw_extra_args, "--ds_neighbor_same_tile_support=", default_value = dm.DS_NEIGHBOR_SAME_TILE_SUPPORT, minimum = 0.0, maximum = 1.0)
+        adjacent_tile_support = parse_optional_float_argument(raw_extra_args, "--ds_neighbor_adjacent_tile_support=", default_value = dm.DS_NEIGHBOR_ADJACENT_TILE_SUPPORT, minimum = 0.0, maximum = 1.0)
+        incompatibility_penalty = parse_optional_float_argument(raw_extra_args, "--ds_neighbor_incompatibility_penalty=", default_value = dm.DS_NEIGHBOR_INCOMPATIBILITY_PENALTY, minimum = 0.0, maximum = 1.0)
     except ValueError as error:
         print(str(error))
         sys.exit(1)
@@ -1598,6 +1825,19 @@ if __name__ == "__main__":
         print("Please choose one terrain flag.")
         sys.exit(1)
 
+    constants.NUMBER_OF_AGENTS = int(swarm_size)
+    constants.DS_DECISION_THRESHOLD = float(decision_threshold)
+    dm.configure_dempster_shafer(
+        top_k = ds_top_k,
+        max_neighbors = ds_max_neighbors,
+        mass_function_mode = mass_function_type,
+        singleton_weight = ds_singleton_weight,
+        compatibility_gain = compatibility_gain,
+        same_tile_support = same_tile_support,
+        incompatibility_penalty = incompatibility_penalty,
+        neighbor_adjacent_tile_support = adjacent_tile_support,
+    )
+
     main(
         experiment_name,
         terrain,
@@ -1605,6 +1845,7 @@ if __name__ == "__main__":
         threshold_type,
         social_fusion,
         visualize,
+        trials = trials,
     )
 
     
