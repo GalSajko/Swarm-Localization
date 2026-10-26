@@ -1,0 +1,7 @@
+numpy==2.4.6
+scipy==1.17.1
+opencv-python==4.13.0.92
+matplotlib==3.11.0
+
+# Only needed to download the dataset with src/download_dataset.py
+# kagglehub
