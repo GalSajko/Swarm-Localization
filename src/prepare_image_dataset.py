@@ -1,12 +1,15 @@
-"""This module contains code for segmentation of the original image on set of subimages. Original image and subimages are saved in 'data/' directory. Besides,
-it uses subimages to calculate BOW codebook, which is saved as JSON file in 'codebooks/' directory.
+"""Prepare the data needed by the simulation. Run from the project's root directory.
+
+1. Train the VLAD centroids on 'data/training_data/ims_gray.np' and save them in 'codebooks/trained_centroids.npy'. This runs only if the centroids
+are missing or if --train is given.
+2. Cut each terrain image from 'data/original_images/' into a grid of subimages and save them in 'data/subimages/<terrain>/'.
+3. Calculate the VLAD vector of every subimage with the trained centroids and save them in 'codebooks/vlad_vectors_<terrain>.npy'.
 """
 
+import argparse
 import cv2
 import glob
-import json
 import math
-import matplotlib.pyplot as plt
 import numpy as np
 import os
 from scipy.cluster.vq import kmeans, vq
@@ -15,29 +18,11 @@ import constants
 import utils
 
 #region DATASET PREPARATION
-COLORED_SATELITE_IMAGE_NAME = 'colored_satelite_image.png'
-BW_SATELITE_IMAGE_NAME = 'bw_satelite_image.png'
-
-TRAINING_DATASET = 'training_data/ims_gray.npy'
-
-PROJECT_ROOT_DIR = 'Swarm-Localization'
-
-def convert_image_to_bw_and_save(original_image_path, original_image_name, path_to_save = None):
-    """Convert given image in black and white and save it into desired directory.
-
-    Args:
-        original_image_path (string): Path of the original image.
-        original_image_name (string): Name of the original image
-        path_to_save (string, optional): Path to the desired directory of the converted image. 
-        If None, converted image will be saved in the same directory as original one. Defaults to None.
-    """
-    image = cv2.imread(original_image_path + original_image_name)
-    bw_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-
-    if not path_to_save:
-        path_to_save = original_image_path
-    
-    cv2.imwrite(path_to_save + BW_SATELITE_IMAGE_NAME, bw_image)
+TRAINING_DATASET_PATHS = (
+    os.path.join("data", "training_data", "ims_gray.npy"),
+    os.path.join("data", "training_data", "ims_gray.np"),
+)
+KMEANS_SEED = 0
 
 def divide_image_on_subimages_and_save(image, divide_on, subimages_dir = constants.SUBIMAGES_DIR, remove_old_files = True):
     """Divide original image on desired number of subimages and save them in subimages directory.
@@ -102,16 +87,6 @@ def remove_files_from_dir(dir):
             continue
         os.remove(file)
 
-def is_correct_dir():
-    """Check if script is called from correct directory. Correct directory is Swarm-Localization/.
-
-    Returns:
-        bool: True, if directory is correct, False otherwise.
-    """
-    current_dir = os.getcwd()
-    last_dir = current_dir.split("/")[-1]
-
-    return last_dir == PROJECT_ROOT_DIR
 # endregion
 
 #region SIFT 
@@ -133,23 +108,12 @@ def root_sift_visual_features(list_of_images):
     for image in list_of_images:
         img_keypoints, img_descriptors = sift_extractor.detectAndCompute(image, None)
         if img_descriptors is None:
-            img_descriptors = np.empty((constants.SIFT_EXTRACTOR.descriptorSize(), 128), dtype = np.float32)
+            img_descriptors = np.empty((0, constants.SIFT_EXTRACTOR.descriptorSize()), dtype = np.float32)
         root_sift_descriptors = utils.root_sift(img_descriptors)
         keypoints.append(img_keypoints)
         descriptors.append(root_sift_descriptors)
     
     return keypoints, descriptors
-
-def show_sift_keypoints(image, keypoints):
-    """Show sift keypoints on image.
-
-    Args:
-        image (numpy.ndarray): Image.
-        keypoints (list): Keypoints of the given image.
-    """
-    image_with_keypoints = cv2.drawKeypoints(image, keypoints, 0, (255, 0, 0), flags = cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
-    plt.imshow(image_with_keypoints, cmap = "gray")
-    plt.show()
 
 def kmeans_over_descriptors(stacked_descriptors):
     """Kmeans clustering over all descriptors from dataset.
@@ -161,16 +125,23 @@ def kmeans_over_descriptors(stacked_descriptors):
         numpy.ndarray: Array of centroids.
     """
     iters = 20
-    centroids, _ = kmeans(stacked_descriptors, NUMBER_OF_CLUSTERS, iters)
+    centroids, _ = kmeans(stacked_descriptors, NUMBER_OF_CLUSTERS, iters, seed = KMEANS_SEED)
 
     return centroids.astype(np.float32, copy = False)
 
 def calculate_centroids(dataset):
-    _, descriptors_in_images = root_sift_visual_features(dataset)
-    descriptors_in_images = descriptors_in_images[descriptors_in_images != None]
-    centroids = kmeans_over_descriptors(np.vstack(descriptors_in_images))
+    """Cluster RootSIFT descriptors of all images in the dataset.
 
-    return centroids
+    Args:
+        dataset (Sequence[numpy.ndarray]): Grayscale images.
+
+    Returns:
+        numpy.ndarray: Array of centroids.
+    """
+    _, descriptors_in_images = root_sift_visual_features(dataset)
+    descriptors_in_images = [descriptors for descriptors in descriptors_in_images if len(descriptors) > 0]
+
+    return kmeans_over_descriptors(np.vstack(descriptors_in_images))
 
 def map_descriptors_to_centroids(descriptors, centroids):
     """Assign descriptors to the closest centroids and save them as list of visual words.
@@ -184,6 +155,10 @@ def map_descriptors_to_centroids(descriptors, centroids):
     """
     mapped_descriptors = []
     for descriptor in descriptors:
+        if len(descriptor) == 0:
+            mapped_descriptors.append(np.empty(0, dtype = np.int64))
+            continue
+
         # For each descriptor return index of centroid the descriptor belongs to.
         visual_words_in_image, _ = vq(descriptor, centroids)
         mapped_descriptors.append(visual_words_in_image)
@@ -192,7 +167,6 @@ def map_descriptors_to_centroids(descriptors, centroids):
 #endregion
 
 #region VLAD
-VLAD_VECTORS_NPY = constants.DEFAULT_VLAD_VECTORS_PATH
 TRAINED_CENTROIDS_NPY = constants.TRAINED_CENTROIDS_PATH
 
 def calculate_vlad_vectors(descriptors, mapped_descriptors, centroids, normalize = True):
@@ -206,7 +180,7 @@ def calculate_vlad_vectors(descriptors, mapped_descriptors, centroids, normalize
     Returns:
         numpy.ndarray: Vlad descriptors of all images.
     """
-    vlad_vectors = np.zeros((len(descriptors), len(centroids), len(descriptors[0][0])), dtype = np.float32)    
+    vlad_vectors = np.zeros((len(descriptors), len(centroids), centroids.shape[1]), dtype = np.float32)    
     for i, (descriptor, centroid_indices) in enumerate(zip(descriptors, mapped_descriptors)):
         if descriptor.size == 0:
             continue
@@ -270,23 +244,24 @@ def normalize_vlad_vectors(vlad_vectors):
 #endregion
 
 #region PREPARE AND SAVE
-def prepare_and_save_vlad_codebook(training_set, testing_set, training = False):
-    """Prepare and save VLAD descriptors of database images.
+def load_training_images():
+    """Load the grayscale training dataset (array of shape (N, H, W)) from the first existing path in TRAINING_DATASET_PATHS."""
+    for path in TRAINING_DATASET_PATHS:
+        if os.path.exists(path):
+            return np.load(path, mmap_mode = "r")
 
-    Args:
-        subimages (numpy.ndarray): Subimages.
-    """
-    if training:
-        centroids = calculate_centroids(training_set)
-        np.save(TRAINED_CENTROIDS_NPY, centroids)
-    else:
-        centroids = np.load(TRAINED_CENTROIDS_NPY)
+    raise FileNotFoundError(f"Training dataset not found. Expected one of: {', '.join(TRAINING_DATASET_PATHS)}")
 
-    _, descriptors = root_sift_visual_features(list(testing_set.values()))
-    mapped_descriptors = map_descriptors_to_centroids(descriptors, centroids)
-    vlad_vectors = calculate_vlad_vectors(descriptors, mapped_descriptors, centroids)
+def train_and_save_centroids():
+    """Train centroids on the training dataset and save them."""
+    training_images = load_training_images()
+    print(f"Training {NUMBER_OF_CLUSTERS} centroids on {len(training_images)} images. This can take a long time.")
+    centroids = calculate_centroids(training_images)
 
-    np.save(VLAD_VECTORS_NPY, vlad_vectors)
+    os.makedirs(constants.CODEBOOKS_DIR, exist_ok = True)
+    np.save(TRAINED_CENTROIDS_NPY, centroids)
+
+    return centroids
 #endregion
 
 def get_terrain_subimages_dir(terrain_name):
@@ -295,9 +270,12 @@ def get_terrain_subimages_dir(terrain_name):
 def get_terrain_vlad_vectors_path(terrain_name):
     return os.path.join(constants.CODEBOOKS_DIR, f'vlad_vectors_{terrain_name}.npy')
 
-def prepare_terrain_subimages_and_codebooks():
-    """Prepare terrain-specific subimages and VLAD vectors using existing trained centroids."""
-    centroids = np.load(TRAINED_CENTROIDS_NPY)
+def prepare_terrain_subimages_and_codebooks(retrain = False):
+    """Prepare terrain-specific subimages and VLAD vectors. Centroids are trained first if they are missing or if retrain is True."""
+    if retrain or not os.path.exists(TRAINED_CENTROIDS_NPY):
+        centroids = train_and_save_centroids()
+    else:
+        centroids = np.load(TRAINED_CENTROIDS_NPY)
 
     for terrain_name, image_name in constants.TERRAIN_IMAGE_NAMES.items():
         image_path = os.path.join(constants.ORIGINAL_IMAGES_DIR, image_name)
@@ -315,14 +293,9 @@ def prepare_terrain_subimages_and_codebooks():
         vlad_vectors = calculate_vlad_vectors(descriptors, mapped_descriptors, centroids)
 
         np.save(get_terrain_vlad_vectors_path(terrain_name), vlad_vectors)
+        print(f"Prepared terrain '{terrain_name}': {len(testing_set)} subimages and VLAD vectors {vlad_vectors.shape}.")
 
 if __name__ == '__main__':
-    if is_correct_dir():
-        prepare_terrain_subimages_and_codebooks()
-
-    else:
-        print(f"Call script from project's root directory: {PROJECT_ROOT_DIR}")
-
-    
-        
-    
+    parser = argparse.ArgumentParser(description = "Prepare subimages and VLAD codebooks. Run from the project's root directory.")
+    parser.add_argument("--train", action = "store_true", help = "Retrain the centroids even if codebooks/trained_centroids.npy already exists.")
+    prepare_terrain_subimages_and_codebooks(parser.parse_args().train)

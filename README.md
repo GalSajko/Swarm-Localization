@@ -14,14 +14,44 @@ Results record whether the final tile equals the target tile, the position error
 
 ## Setup
 
-Run everything from the repository root, because paths are relative. Create a virtual environment at `.venv/`, which the experiment scripts expect, and install the dependencies (tested with Python 3.14). `kagglehub` is only needed for `src/download_dataset.py`, so install it separately if you use that script.
+Run everything from the repository root, because paths are relative. Create a virtual environment at `.venv/`, which the experiment scripts expect, and install the dependencies (tested with Python 3.14). `kagglehub` and `joblib` are only needed for `src/download_dataset.py`, so install them separately if you use that script.
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 ```
 
-1. Put the grayscale terrain images in `data/original_images/` as `city_bw.png`, `desert_bw.png`, `mountains_bw.png` and `rural_bw.png`. `src/download_dataset.py` fetches the source dataset.
-2. Build the tiles, centroids and codebooks: `.venv/bin/python src/prepare_image_dataset.py`. This writes `data/subimages/<terrain>/` and `codebooks/`.
+### Data files
+
+`data/` and `codebooks/` are git-ignored, so a fresh clone does not contain them. Get the files below from the project owner and copy them into the repository so that it looks like this (`.gitkeep` files are already there):
+
+```
+data/
+  original_images/
+    city_bw.png  desert_bw.png  mountains_bw.png  rural_bw.png   <- grayscale terrain maps
+  training_data/
+    ims_gray.npy                 <- only needed to retrain the centroids (see below)
+codebooks/
+  trained_centroids.npy          <- (256, 128) float32 k-means centroids
+  vlad_vectors_city.npy  vlad_vectors_desert.npy
+  vlad_vectors_mountains.npy  vlad_vectors_rural.npy   <- (400, 256, 128) float32, one row per tile
+```
+
+### Prepare the tiles
+
+```bash
+.venv/bin/python src/prepare_image_dataset.py
+```
+
+This reads `data/original_images/` and `codebooks/trained_centroids.npy` and writes:
+
+- `data/subimages/<terrain>/XX_YY.png`: the 400 tiles of each terrain (20x20 grid). The simulator needs them.
+- `codebooks/vlad_vectors_<terrain>.npy`: the VLAD vector of every tile, recomputed from the centroids. With the original centroids the result is identical to the provided files, so the provided `vlad_vectors_*.npy` files are only a backup. Run the script once after copying the files.
+
+### Without `trained_centroids.npy`
+
+If the centroids file is missing, the script trains it first (256 RootSIFT k-means clusters, fixed seed) from `data/training_data/ims_gray.npy` (uint8 array of shape `(1260, 1024, 1024)`; `ims_gray.np` is accepted too), saves it to `codebooks/`, and then continues as above. Training is slow and memory-hungry. `--train` forces retraining even when the centroids exist. Retrained centroids will not equal the paper's, so VLAD vectors and results will differ slightly. To reproduce the paper, use the original `trained_centroids.npy`.
+
+If you do not have `ims_gray.npy`, create it with `.venv/bin/pip install kagglehub joblib` and `.venv/bin/python src/download_dataset.py`. The script downloads the `ims.np` file (about 5 GB, RGBA images) of the Kaggle dataset `sabermalek/spacenetsi` into the kagglehub cache, converts it to grayscale (`cv2.COLOR_RGB2GRAY`) and writes `data/training_data/ims_gray.npy` (1.3 GB). The result is byte-identical to the original `ims_gray.np`. It is not needed to run the simulations. `--force` overwrites an existing file, and the kagglehub cache (`~/.cache/kagglehub`) can be deleted afterwards.
 
 ## Running experiments
 
