@@ -34,7 +34,7 @@ One experiment is one terrain, one personal fusion rule, one social fusion rule:
 
 - **Terrain:** `--city`, `--desert`, `--mountains` or `--rural` (exactly one).
 - **`--threshold_type`:** `dynamic`, `fixed` or `uncertainty` (required). An agent commits to its best tile when:
-  - `dynamic`: its best-tile score reaches a threshold that decays from `--ds_decision_threshold` toward 0.15 while the leading tile stays the same.
+  - `dynamic`: its best-tile score reaches a threshold that decays from `--ds_decision_threshold` toward 0.15 while the leading tile stays the same. A score is at most 1, so the useful range of the initial value is (0.15, 1].
   - `fixed`: its best-tile score reaches `--ds_decision_threshold`.
   - `uncertainty`: the mass on Θ (ignorance) of its belief drops below `--ds_decision_threshold`, which must be given explicitly and lie in (0, 1].
 - **`--personal_fusion`:** `dempster`, `yager`, `adaptive` (switches between the two when the conflict mass passes 0.5) or `hybrid` (even agent ids use Yager, odd ids use Dempster). Required.
@@ -77,7 +77,7 @@ Defaults follow Table 1 of the paper. They apply to every run, and the experimen
 | personal fusion rule | `--personal_fusion` | `dempster` |
 | social fusion rule | `--social_fusion` | `comp_boost` |
 | threshold type | `--threshold_type` | `dynamic` |
-| initial threshold tau_max | `--ds_decision_threshold` | 10.0 |
+| initial threshold tau_max | `--ds_decision_threshold` | 1.0 |
 | mass function | `--mass_function` | `spatial_topk` |
 | top-k hypothesis budget k | `--ds_top_k` | 4 |
 | neighbor-retention budget L | `--ds_max_neighbors` | 4 |

@@ -24,6 +24,7 @@ TERRAIN_NAMES = tuple(TERRAIN_IMAGE_NAMES.keys())
 # Height 100 m, 82 deg diagonal FOV, 4:3 aspect ratio.
 AGENT_SIZE = np.array([79, 63])
 
-DS_DECISION_THRESHOLD = 10.0
+# A decision score is the mass of non-Theta focal sets containing a tile, so it never exceeds 1.
+DS_DECISION_THRESHOLD = 1.0
 DS_THRESHOLD_MIN = 0.15
-DS_THRESHOLD_MAX = 101.5
+DS_THRESHOLD_MAX = 1.0

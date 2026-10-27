@@ -170,6 +170,7 @@ run_decision_threshold_sweep.sh
 /data/
 /results/
 /codebooks/
+/plotters/
 
 !data/.gitkeep
 !data/original_images/.gitkeep
@@ -177,3 +178,5 @@ run_decision_threshold_sweep.sh
 !data/training_data/.gitkeep
 !results/.gitkeep
 !codebooks/.gitkeep
+
+experiments_readme.md
