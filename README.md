@@ -33,7 +33,10 @@ One experiment is one terrain, one personal fusion rule, one social fusion rule:
 ```
 
 - **Terrain:** `--city`, `--desert`, `--mountains` or `--rural` (exactly one).
-- **`--threshold_type`:** `dynamic` or `fixed` (required).
+- **`--threshold_type`:** `dynamic`, `fixed` or `uncertainty` (required). An agent commits to its best tile when:
+  - `dynamic`: its best-tile score reaches a threshold that decays from `--ds_decision_threshold` toward 0.15 while the leading tile stays the same.
+  - `fixed`: its best-tile score reaches `--ds_decision_threshold`.
+  - `uncertainty`: the mass on Θ (ignorance) of its belief drops below `--ds_decision_threshold`, which must be given explicitly and lie in (0, 1].
 - **`--personal_fusion`:** `dempster`, `yager`, `adaptive` (switches between the two when the conflict mass passes 0.5) or `hybrid` (even agent ids use Yager, odd ids use Dempster). Required.
 - **`--social_fusion`:** `comp_boost`, `comp_boost_directed` (compatibility only counts for neighbors in the matching direction), `yager`, or `disabled` (no neighbor influence). Required.
 - **Other options:** `--trials=`, `--swarm_size=`, `--mass_function=spatial_topk|topk`, `--ds_decision_threshold=`, `--ds_top_k=`, `--ds_max_neighbors=`, `--ds_singleton_weight=`, `--ds_neighbor_compatibility_gain=`, `--ds_neighbor_same_tile_support=`, `--ds_neighbor_adjacent_tile_support=`, `--ds_neighbor_incompatibility_penalty=`. Add `--visualize` to watch a run.

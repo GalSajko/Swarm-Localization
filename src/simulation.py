@@ -10,7 +10,7 @@ import constants
 import decision_making as dm
 import utils
 
-NUMBER_OF_TRIALS = 100
+NUMBER_OF_TRIALS = 200
 LEGACY_DS_METHOD_ALIAS = "ds"
 MAX_EXPERIMENT_TIME = 400
 
@@ -1106,6 +1106,7 @@ def experiment(
     social_fusion_rule = "comp_boost",
     use_fixed_threshold = False,
     visualize = True,
+    use_uncertainty_threshold = False,
 ):
     """Single run of the experiment.
 
@@ -1149,6 +1150,7 @@ def experiment(
             fixed_neighbor_ids = fixed_adjacency_neighbors[i],
             grid_matrix = grid_matrix,
             trial_start_time = trial_start_time,
+            use_uncertainty_threshold = use_uncertainty_threshold,
         )
         for i in range(len(positions))
     ]
@@ -1373,6 +1375,7 @@ def main(
         results_experiment_name = f"{experiment_name}_{social_fusion_type}"
     results_paths = build_results_paths(results_experiment_name)
     use_fixed_threshold = threshold_type == "fixed"
+    use_uncertainty_threshold = threshold_type == "uncertainty"
     effective_social_fusion_rule = social_fusion_rule
     if social_fusion_rule == "disabled":
         dm.configure_dempster_shafer(
@@ -1394,6 +1397,7 @@ def main(
             effective_social_fusion_rule,
             use_fixed_threshold,
             visualize,
+            use_uncertainty_threshold = use_uncertainty_threshold,
         )
         trial_summary_row = [
             experiment_name,
@@ -1769,7 +1773,7 @@ if __name__ == "__main__":
         print(
             "Unsupported CLI flags: "
             + ", ".join(invalid_flags)
-            + ". Supported flags are terrain flags, --visualize, required --threshold_type=fixed|dynamic, "
+            + ". Supported flags are terrain flags, --visualize, required --threshold_type=fixed|dynamic|uncertainty, "
             + "--social_fusion=comp_boost|comp_boost_directed|disabled|yager, --personal_fusion=adaptive|dempster|hybrid|yager, "
             + "optional --mass_function=spatial_topk|topk, "
             + "and optional --trials=, --swarm_size=, --ds_decision_threshold=, --ds_top_k=, --ds_max_neighbors=, "
@@ -1784,7 +1788,7 @@ if __name__ == "__main__":
         threshold_type = parse_required_choice_argument(
             raw_extra_args,
             "--threshold_type=",
-            ("dynamic", "fixed"),
+            ("dynamic", "fixed", "uncertainty"),
         )
         social_fusion = parse_required_choice_argument(
             raw_extra_args,
@@ -1805,6 +1809,11 @@ if __name__ == "__main__":
         trials = parse_optional_int_argument(raw_extra_args, "--trials=", default_value = NUMBER_OF_TRIALS, minimum = 1)
         swarm_size = parse_optional_int_argument(raw_extra_args, "--swarm_size=", default_value = constants.NUMBER_OF_AGENTS, minimum = 1)
         decision_threshold = parse_optional_float_argument(raw_extra_args, "--ds_decision_threshold=", default_value = constants.DS_DECISION_THRESHOLD, minimum = 0.0)
+        if threshold_type == "uncertainty":
+            if not any(argument.startswith("--ds_decision_threshold=") for argument in raw_extra_args):
+                raise ValueError("--threshold_type=uncertainty requires --ds_decision_threshold=<value in (0, 1]>.")
+            if not 0.0 < decision_threshold <= 1.0:
+                raise ValueError("With --threshold_type=uncertainty, --ds_decision_threshold must be in (0, 1].")
         ds_top_k = parse_optional_int_argument(raw_extra_args, "--ds_top_k=", default_value = dm.DS_TOP_K, minimum = 1)
         ds_max_neighbors = parse_optional_int_argument(raw_extra_args, "--ds_max_neighbors=", default_value = dm.DS_MAX_NEIGHBORS, minimum = 0)
         ds_singleton_weight = parse_optional_float_argument(raw_extra_args, "--ds_singleton_weight=", default_value = dm.DS_SINGLETON_WEIGHT, minimum = 0.0, maximum = 1.0)

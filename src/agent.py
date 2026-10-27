@@ -49,6 +49,7 @@ class Agent:
         grid_matrix = None,
         threshold_value = None,
         trial_start_time = None,
+        use_uncertainty_threshold = False,
     ):
         self.id = id 
         self.speed_up_factor = speed_up_factor
@@ -98,7 +99,9 @@ class Agent:
         self.personal_information = np.zeros(len(self.codebook))
         self.personal_information_locker = threading.Lock()
         self.decision_threshold = constants.DS_DECISION_THRESHOLD if threshold_value is None else float(threshold_value)
-        self.use_fixed_threshold = use_fixed_threshold
+        self.use_uncertainty_threshold = bool(use_uncertainty_threshold)
+        # Uncertainty termination uses one static value, so the threshold bookkeeping follows the fixed-threshold path.
+        self.use_fixed_threshold = use_fixed_threshold or self.use_uncertainty_threshold
         self.social_fusion_rule = str(social_fusion_rule)
         self.personal_fusion_rule = str(personal_fusion_rule)
         self.fixed_neighbor_ids = set() if fixed_neighbor_ids is None else {str(neighbor_id) for neighbor_id in fixed_neighbor_ids}
@@ -737,6 +740,10 @@ class Agent:
         best_hypothesis, best_decision_score = self.get_best_decision_score()
         if best_hypothesis is None:
             return None
+        if self.use_uncertainty_threshold:
+            if self.get_uncertainty() < self.decision_threshold:
+                return best_hypothesis
+            return None
         threshold = self.decision_threshold if self.use_fixed_threshold else self.get_dynamic_threshold()
         if best_decision_score >= threshold:
             return best_hypothesis
@@ -768,6 +775,14 @@ class Agent:
         if max_rank is not None:
             return ranked_hypotheses[:max_rank]
         return ranked_hypotheses
+
+    def get_uncertainty(self):
+        """Return the mass assigned to Theta (ignorance) in the current DS mass."""
+        if not self.opinions:
+            return 1.0
+
+        theta_size = len(self.theta_set)
+        return float(sum(mass for focal_set, mass in self.opinions.items() if len(focal_set) == theta_size))
 
     def get_best_focal_set(self):
         """Return the highest-mass non-Theta focal set from the current DS mass."""
