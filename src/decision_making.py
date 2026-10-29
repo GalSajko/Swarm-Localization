@@ -711,3 +711,27 @@ def _get_entropy_based_confidence(belief):
     belief = np.clip(belief, epsilon, 1 - epsilon)
     entropy = -np.sum(belief * np.log(belief))
     return 1 - (entropy / np.log(len(belief)))
+
+
+def evaluate_termination(uncertainty, scores, threshold):
+    """Decide whether an agent commits to its leading tile from its uncertainty and decision scores.
+
+    The concentration is the share of the committed (non-Theta) mass that supports the leading tile, best_score / (1 - uncertainty). It combines both
+    inputs: low uncertainty alone does not make it high if the committed mass is spread, and a high score alone does not if much mass is still on Theta.
+
+    Args:
+        uncertainty (float): Mass assigned to Theta.
+        scores (numpy.ndarray): Decision scores of all tiles.
+        threshold (float): Minimal concentration, in (0, 1].
+
+    Returns:
+        tuple[int | None, float]: The tile to commit to, or None to keep observing, and the concentration.
+    """
+    scores = np.asarray(scores, dtype = np.float64)
+    committed_mass = 1.0 - float(uncertainty)
+    if scores.size == 0 or committed_mass <= 0.0:
+        return None, 0.0
+
+    best_tile = int(np.argmax(scores))
+    concentration = float(scores[best_tile]) / committed_mass
+    return (best_tile if concentration >= threshold else None), concentration

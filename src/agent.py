@@ -50,6 +50,7 @@ class Agent:
         threshold_value = None,
         trial_start_time = None,
         use_uncertainty_threshold = False,
+        use_concentration_threshold = False,
     ):
         self.id = id 
         self.speed_up_factor = speed_up_factor
@@ -101,7 +102,8 @@ class Agent:
         self.decision_threshold = constants.DS_DECISION_THRESHOLD if threshold_value is None else float(threshold_value)
         self.use_uncertainty_threshold = bool(use_uncertainty_threshold)
         # Uncertainty termination uses one static value, so the threshold bookkeeping follows the fixed-threshold path.
-        self.use_fixed_threshold = use_fixed_threshold or self.use_uncertainty_threshold
+        self.use_concentration_threshold = bool(use_concentration_threshold)
+        self.use_fixed_threshold = use_fixed_threshold or self.use_uncertainty_threshold or self.use_concentration_threshold
         self.social_fusion_rule = str(social_fusion_rule)
         self.personal_fusion_rule = str(personal_fusion_rule)
         self.fixed_neighbor_ids = set() if fixed_neighbor_ids is None else {str(neighbor_id) for neighbor_id in fixed_neighbor_ids}
@@ -744,6 +746,8 @@ class Agent:
             if self.get_uncertainty() < self.decision_threshold:
                 return best_hypothesis
             return None
+        if self.use_concentration_threshold:
+            return dm.evaluate_termination(self.get_uncertainty(), self.ds_scores, self.decision_threshold)[0]
         threshold = self.decision_threshold if self.use_fixed_threshold else self.get_dynamic_threshold()
         if best_decision_score >= threshold:
             return best_hypothesis
@@ -760,6 +764,29 @@ class Agent:
             return None, -1.0
         best_hypothesis = int(np.argmax(self.ds_scores))
         return best_hypothesis, float(self.ds_scores[best_hypothesis])
+
+    def get_decision_signals(self):
+        """Return the signals a termination rule can use: uncertainty, the best score, the second-best score and the rival score.
+
+        The rival score is the best score among tiles outside the 3x3 neighborhood of the leading tile, because adjacent tiles share mass with the leader.
+        """
+        best_hypothesis, best_decision_score = self.get_best_decision_score()
+        signals = {"uncertainty": self.get_uncertainty(), "best_score": best_decision_score, "second_score": None, "rival_score": None}
+        if best_hypothesis is None or len(self.ds_scores) < 2:
+            return signals
+
+        scores = np.asarray(self.ds_scores, dtype = np.float64)
+        other_scores = scores.copy()
+        other_scores[best_hypothesis] = -np.inf
+        signals["second_score"] = float(other_scores.max())
+
+        columns, rows = constants.SUBIMAGE_GRID_SIZE
+        best_column, best_row = divmod(best_hypothesis, rows)
+        indices = np.arange(len(scores))
+        outside_neighborhood = (np.abs(indices // rows - best_column) > 1) | (np.abs(indices % rows - best_row) > 1)
+        if outside_neighborhood.any():
+            signals["rival_score"] = float(scores[outside_neighborhood].max())
+        return signals
 
     def get_ranked_hypotheses_from_current_scores(self, max_rank = None):
         """Return hypotheses sorted by current decision score, excluding zero-support entries."""
@@ -823,6 +850,7 @@ class Agent:
         unique_received_opinion_count = len(self.social_information)
         consensus_position = self.get_consensus_position()
         consensus_position_change = self.get_consensus_position_change()
+        signals = self.get_decision_signals() if constants.LOG_DECISION_SIGNALS else {}
 
         if current_decision is not None and self.first_decision_time is None:
             self.first_decision_time = elapsed_time
@@ -844,6 +872,9 @@ class Agent:
                 "continuous_frozen": self.is_continuous_frozen(),
                 "continuous_done": self.is_continuous_done(),
                 "decision": current_decision,
+                "uncertainty": signals.get("uncertainty"),
+                "second_score": signals.get("second_score"),
+                "rival_score": signals.get("rival_score"),
             }
         )
 

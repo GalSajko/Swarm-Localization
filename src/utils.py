@@ -5,6 +5,8 @@ import time
 
 import numpy as np
 
+import constants
+
 def calculate_cosine_similarity(first_vector, second_vector):
     """Calculate cosine similarity between two vectors, returning 0 if either has zero norm."""
     flat_first_vector = np.asarray(first_vector, dtype = np.float64).ravel()
@@ -24,8 +26,10 @@ def evaluate_similarity(vlad_vectors, codebook):
     dot_products = flat_codebook @ flat_vlad
     return np.divide(dot_products, products_of_norms, out = np.zeros_like(dot_products), where = products_of_norms > 0)
 
-def softmax_over_vector(vector, tau = 0.02):
-    """Convert cosine similarities into normalized personal evidence."""
+def softmax_over_vector(vector, tau = None):
+    """Convert cosine similarities into normalized personal evidence. The temperature defaults to constants.SOFTMAX_TAU."""
+    if tau is None:
+        tau = constants.SOFTMAX_TAU
     scores = np.asarray(vector, dtype = np.float64)
     if scores.ndim != 1 or scores.size == 0:
         raise ValueError("Expected a nonempty similarity vector.")

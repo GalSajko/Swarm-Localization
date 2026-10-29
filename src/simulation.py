@@ -1107,6 +1107,7 @@ def experiment(
     use_fixed_threshold = False,
     visualize = True,
     use_uncertainty_threshold = False,
+    use_concentration_threshold = False,
 ):
     """Single run of the experiment.
 
@@ -1151,6 +1152,7 @@ def experiment(
             grid_matrix = grid_matrix,
             trial_start_time = trial_start_time,
             use_uncertainty_threshold = use_uncertainty_threshold,
+            use_concentration_threshold = use_concentration_threshold,
         )
         for i in range(len(positions))
     ]
@@ -1376,6 +1378,7 @@ def main(
     results_paths = build_results_paths(results_experiment_name)
     use_fixed_threshold = threshold_type == "fixed"
     use_uncertainty_threshold = threshold_type == "uncertainty"
+    use_concentration_threshold = threshold_type == "concentration"
     effective_social_fusion_rule = social_fusion_rule
     if social_fusion_rule == "disabled":
         dm.configure_dempster_shafer(
@@ -1398,6 +1401,7 @@ def main(
             use_fixed_threshold,
             visualize,
             use_uncertainty_threshold = use_uncertainty_threshold,
+            use_concentration_threshold = use_concentration_threshold,
         )
         trial_summary_row = [
             experiment_name,
@@ -1634,6 +1638,8 @@ def main(
                     "" if snapshot["decision"] is None else convert_decision_index_to_subimage_name(snapshot["decision"], image_shape),
                     snapshot["decision"] is not None,
                 ]
+                if constants.LOG_DECISION_SIGNALS:
+                    dynamics_row += [snapshot["uncertainty"], snapshot["second_score"], snapshot["rival_score"]]
                 dynamics_header = [
                     "experiment_name",
                     "trial_index",
@@ -1673,6 +1679,8 @@ def main(
                     "decision_name",
                     "is_decided",
                 ]
+                if constants.LOG_DECISION_SIGNALS:
+                    dynamics_header += ["uncertainty", "second_score", "rival_score"]
                 utils.write_results_to_csv(results_paths["decision_dynamics"], dynamics_row, header = dynamics_header)
 
         for snapshot in consensus_dispersion_history:
@@ -1768,27 +1776,30 @@ if __name__ == "__main__":
         and not argument.startswith("--ds_neighbor_same_tile_support=")
         and not argument.startswith("--ds_neighbor_adjacent_tile_support=")
         and not argument.startswith("--ds_neighbor_incompatibility_penalty=")
+        and not argument.startswith("--softmax_tau=")
+        and argument != "--log_signals"
     ]
     if invalid_flags:
         print(
             "Unsupported CLI flags: "
             + ", ".join(invalid_flags)
-            + ". Supported flags are terrain flags, --visualize, required --threshold_type=fixed|dynamic|uncertainty, "
+            + ". Supported flags are terrain flags, --visualize, required --threshold_type=fixed|dynamic|uncertainty|concentration, "
             + "--social_fusion=comp_boost|comp_boost_directed|disabled|yager, --personal_fusion=adaptive|dempster|hybrid|yager, "
             + "optional --mass_function=spatial_topk|topk, "
             + "and optional --trials=, --swarm_size=, --ds_decision_threshold=, --ds_top_k=, --ds_max_neighbors=, "
             + "--ds_singleton_weight=, --ds_neighbor_compatibility_gain=, --ds_neighbor_same_tile_support=, "
-            + "--ds_neighbor_adjacent_tile_support=, --ds_neighbor_incompatibility_penalty=."
+            + "--ds_neighbor_adjacent_tile_support=, --ds_neighbor_incompatibility_penalty=, --softmax_tau=, --log_signals."
         )
         sys.exit(1)
 
     extra_args = set(raw_extra_args)
     visualize = "--visualize" in extra_args
+    constants.LOG_DECISION_SIGNALS = "--log_signals" in extra_args
     try:
         threshold_type = parse_required_choice_argument(
             raw_extra_args,
             "--threshold_type=",
-            ("dynamic", "fixed", "uncertainty"),
+            ("dynamic", "fixed", "uncertainty", "concentration"),
         )
         social_fusion = parse_required_choice_argument(
             raw_extra_args,
@@ -1809,11 +1820,11 @@ if __name__ == "__main__":
         trials = parse_optional_int_argument(raw_extra_args, "--trials=", default_value = NUMBER_OF_TRIALS, minimum = 1)
         swarm_size = parse_optional_int_argument(raw_extra_args, "--swarm_size=", default_value = constants.NUMBER_OF_AGENTS, minimum = 1)
         decision_threshold = parse_optional_float_argument(raw_extra_args, "--ds_decision_threshold=", default_value = constants.DS_DECISION_THRESHOLD, minimum = 0.0)
-        if threshold_type == "uncertainty":
+        if threshold_type in ("uncertainty", "concentration"):
             if not any(argument.startswith("--ds_decision_threshold=") for argument in raw_extra_args):
-                raise ValueError("--threshold_type=uncertainty requires --ds_decision_threshold=<value in (0, 1]>.")
+                raise ValueError(f"--threshold_type={threshold_type} requires --ds_decision_threshold=<value in (0, 1]>.")
             if not 0.0 < decision_threshold <= 1.0:
-                raise ValueError("With --threshold_type=uncertainty, --ds_decision_threshold must be in (0, 1].")
+                raise ValueError(f"With --threshold_type={threshold_type}, --ds_decision_threshold must be in (0, 1].")
         ds_top_k = parse_optional_int_argument(raw_extra_args, "--ds_top_k=", default_value = dm.DS_TOP_K, minimum = 1)
         ds_max_neighbors = parse_optional_int_argument(raw_extra_args, "--ds_max_neighbors=", default_value = dm.DS_MAX_NEIGHBORS, minimum = 0)
         ds_singleton_weight = parse_optional_float_argument(raw_extra_args, "--ds_singleton_weight=", default_value = dm.DS_SINGLETON_WEIGHT, minimum = 0.0, maximum = 1.0)
@@ -1821,6 +1832,7 @@ if __name__ == "__main__":
         same_tile_support = parse_optional_float_argument(raw_extra_args, "--ds_neighbor_same_tile_support=", default_value = dm.DS_NEIGHBOR_SAME_TILE_SUPPORT, minimum = 0.0, maximum = 1.0)
         adjacent_tile_support = parse_optional_float_argument(raw_extra_args, "--ds_neighbor_adjacent_tile_support=", default_value = dm.DS_NEIGHBOR_ADJACENT_TILE_SUPPORT, minimum = 0.0, maximum = 1.0)
         incompatibility_penalty = parse_optional_float_argument(raw_extra_args, "--ds_neighbor_incompatibility_penalty=", default_value = dm.DS_NEIGHBOR_INCOMPATIBILITY_PENALTY, minimum = 0.0, maximum = 1.0)
+        constants.SOFTMAX_TAU = parse_optional_float_argument(raw_extra_args, "--softmax_tau=", default_value = constants.SOFTMAX_TAU, minimum = 1e-6)
     except ValueError as error:
         print(str(error))
         sys.exit(1)

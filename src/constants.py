@@ -13,6 +13,12 @@ CONTINUOUS_RESULTS_DIR = "results/continuous_est"
 TRAINED_CENTROIDS_PATH = f"{CODEBOOKS_DIR}/trained_centroids.npy"
 DEFAULT_VLAD_VECTORS_PATH = f"{CODEBOOKS_DIR}/vlad_vectors.npy"
 SUBIMAGE_GRID_SIZE = (20, 20)
+
+# Temperature of the softmax that converts cosine similarities into personal evidence. Set with --softmax_tau.
+SOFTMAX_TAU = 0.02
+
+# Add uncertainty and rival scores to the per-cycle decision dynamics export. Set with --log_signals.
+LOG_DECISION_SIGNALS = False
 TERRAIN_IMAGE_NAMES = {
     "city": "city_bw.png",
     "desert": "desert_bw.png",
