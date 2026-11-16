@@ -8,7 +8,7 @@ Collective localization of an aerial swarm by image retrieval, without GPS. A sw
 2. **Personal evidence.** Each agent sweeps its own search cell. It collects descriptors during an exploration cycle, builds one VLAD vector from them, and compares it by cosine similarity with all 400 tiles. A softmax with temperature `tau` (`utils.softmax_over_vector`) turns the similarities into a probability vector.
 3. **Dempster-Shafer fusion.** The probability vector becomes a mass function. The top-k tiles get singleton masses and spatial neighbor-pair masses (`spatial_topk`). The remaining mass goes to the whole frame Theta, scaled by an entropy-based confidence. Each cycle the agent fuses this with its running belief (**personal fusion**).
 4. **Social fusion.** Agents exchange masses with their fixed grid neighbors (ring range 1) and fuse them (**social fusion**). With compatibility boost, neighbors whose hypotheses are the same or adjacent tiles reinforce each other, and incompatible ones are penalized.
-5. **Two-stage consensus.** An agent decides ("freezes") once its best score passes a threshold, which is fixed or adapted dynamically. Frozen agents then run a confidence-weighted Laplacian average of their position estimates with frozen neighbors until the estimates stabilize.
+5. **Two-stage consensus.** An agent decides ("freezes") once its belief passes a termination rule: its best score passes a fixed or dynamically adapted threshold, its ignorance drops low enough, or enough of its committed mass concentrates on one tile (see `--threshold_type`). Frozen agents then run a confidence-weighted Laplacian average of their position estimates with frozen neighbors until the estimates stabilize.
 
 Results record whether the final tile equals the target tile, the position error in meters, consensus time, and the dispersion of decisions.
 
@@ -63,10 +63,13 @@ One experiment is one terrain, one personal fusion rule, one social fusion rule:
 ```
 
 - **Terrain:** `--city`, `--desert`, `--mountains` or `--rural` (exactly one).
-- **`--threshold_type`:** `dynamic`, `fixed` or `uncertainty` (required). An agent commits to its best tile when:
-  - `dynamic`: its best-tile score reaches a threshold that decays from `--ds_decision_threshold` toward 0.15 while the leading tile stays the same. A score is at most 1, so the useful range of the initial value is (0.15, 1].
-  - `fixed`: its best-tile score reaches `--ds_decision_threshold`.
-  - `uncertainty`: the mass on Θ (ignorance) of its belief drops below `--ds_decision_threshold`, which must be given explicitly and lie in (0, 1].
+- **`--threshold_type`:** `dynamic`, `fixed`, `uncertainty` or `concentration` (required). The rule is checked after every decision cycle. It uses the best-tile score `s1` (the mass of the non-Θ focal sets that contain the leading tile, at most 1), the mass on Θ (ignorance) `u`, and the threshold `tau` = `--ds_decision_threshold`. An agent commits to its best tile when:
+  - `dynamic`: `s1 >= tau_max - S * (tau_max - 0.15)`, where `tau_max` = `--ds_decision_threshold` and `S` in [0, 1] is the stability of the leading tile. `S` starts at 0 and grows by 0.25 per cycle while the leading tile stays the same, so the threshold falls 1.0, 0.79, 0.58, 0.36, 0.15 over five stable cycles (for `tau_max` = 1). When the leader changes, `S` is scaled by 0.75, 0.5 or 0.25 if the new leader was ranked 2nd, 3rd or 4th in the previous cycle, and reset to 0 otherwise. The useful range of `tau_max` is (0.15, 1].
+  - `fixed`: `s1 >= tau`, a constant. With the default `tau` = 1 an agent practically never commits on its own, so give a lower value.
+  - `uncertainty`: `u < tau`, regardless of how the committed mass is spread over tiles.
+  - `concentration`: `s1 / (1 - u) >= tau`, i.e. the share of the committed (non-Θ) mass that supports the leading tile. Low ignorance alone is not enough if the committed mass is spread, and a high score alone is not enough if much mass is still on Θ.
+
+  `uncertainty` and `concentration` require an explicit `--ds_decision_threshold` in (0, 1]. With every rule an agent can also freeze by adopting the decision of frozen neighbors, and at the time limit every agent takes its current best tile. `--log_signals` adds `u`, the best and second-best scores and the rival score (best score outside the leader's 3x3 neighborhood) to `decision_dynamics.csv`, which helps when tuning `uncertainty` or `concentration`.
 - **`--personal_fusion`:** `dempster`, `yager`, `adaptive` (switches between the two when the conflict mass passes 0.5) or `hybrid` (even agent ids use Yager, odd ids use Dempster). Required.
 - **`--social_fusion`:** `comp_boost`, `comp_boost_directed` (compatibility only counts for neighbors in the matching direction), `yager`, or `disabled` (no neighbor influence). Required.
 - **Other options:** `--trials=`, `--swarm_size=`, `--mass_function=spatial_topk|topk`, `--ds_decision_threshold=`, `--ds_top_k=`, `--ds_max_neighbors=`, `--ds_singleton_weight=`, `--ds_neighbor_compatibility_gain=`, `--ds_neighbor_same_tile_support=`, `--ds_neighbor_adjacent_tile_support=`, `--ds_neighbor_incompatibility_penalty=`. Add `--visualize` to watch a run.
