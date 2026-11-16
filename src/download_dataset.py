@@ -1,8 +1,8 @@
-"""Download the SpaceNet training images and save them as a grayscale array for training the VLAD centroids. Run from the project's root directory.
+"""Download the SpaceNet training images and save them as a grayscale array for training the fuzzy c-means centers. Run from the project's root directory.
 
 The Kaggle dataset 'sabermalek/spacenetsi' stores 1260 RGBA images (1024x1024) as a joblib-pickled array in 'ims.np'. The grayscale conversion
 (cv2.COLOR_RGB2GRAY on the first three channels) is written to 'data/training_data/ims_gray.npy' with shape (1260, 1024, 1024) and dtype uint8, which is
-the file that 'prepare_image_dataset.py' trains the centroids on. Requires the optional packages 'kagglehub' and 'joblib'.
+the file that 'prepare_image_dataset.py' trains the centers on. Requires the optional packages 'kagglehub' and 'joblib'.
 """
 
 import argparse

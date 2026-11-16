@@ -1,6 +1,11 @@
 import cv2
 import numpy as np
 
+# Ranges of the randomized camera degradation. The repeatability filter of the map (feature_repeatability.py) covers the same ranges.
+ZOOM_FACTOR_RANGE = (1.01, 1.08)
+RESOLUTION_FACTOR_RANGE = (0.70, 0.85)
+NOISE_SIGMA_RANGE = (4.0, 10.0)
+
 def pixelate_image(original_image, new_size):
     """Reduce image resolution and upscale it back to the original size.
 
@@ -89,9 +94,9 @@ def augment_drone_capture(
         numpy.ndarray: Augmented image.
     """
     if randomize:
-        zoom_factor = np.random.uniform(1.01, 1.08)
-        resolution_factor = np.random.uniform(0.70, 0.85)
-        noise_sigma = np.random.uniform(4.0, 10.0)
+        zoom_factor = np.random.uniform(*ZOOM_FACTOR_RANGE)
+        resolution_factor = np.random.uniform(*RESOLUTION_FACTOR_RANGE)
+        noise_sigma = np.random.uniform(*NOISE_SIGMA_RANGE)
 
     height, width = original_image.shape[:2]
     degraded_width = max(1, int(round(width * resolution_factor)))
@@ -105,3 +110,29 @@ def augment_drone_capture(
     augmented_image = np.clip(original_image_float + gaussian_noise, 0, 255).astype(np.uint8)
 
     return augmented_image
+
+def degrade_whole_image(original_image, zoom_factor, resolution_factor, noise_sigma, random_generator):
+    """Apply the degradation of 'augment_drone_capture' to a whole image without cropping it.
+
+    A drone capture is zoomed by cropping its center and stretching it back to the original size. Here the whole image is enlarged by the zoom
+    factor instead, which changes every feature in the same way but keeps the image borders. The result is therefore larger than the input.
+
+    Args:
+        original_image (numpy.ndarray): Input grayscale image.
+        zoom_factor (float): Zoom multiplier.
+        resolution_factor (float): Downscale factor before upsampling.
+        noise_sigma (float): Gaussian noise sigma.
+        random_generator (numpy.random.Generator): Random generator for the noise.
+
+    Returns:
+        numpy.ndarray: Degraded image, enlarged by the zoom factor.
+    """
+    height, width = original_image.shape[:2]
+    zoomed_width = int(round(width * zoom_factor))
+    zoomed_height = int(round(height * zoom_factor))
+    zoomed_image = cv2.resize(original_image, (zoomed_width, zoomed_height), interpolation = cv2.INTER_LINEAR)
+
+    degraded_image = pixelate_image(zoomed_image, (zoomed_width * resolution_factor, zoomed_height * resolution_factor)).astype(np.float32)
+    degraded_image += random_generator.normal(0.0, noise_sigma, degraded_image.shape).astype(np.float32)
+
+    return np.clip(degraded_image, 0, 255).astype(np.uint8)

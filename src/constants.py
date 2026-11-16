@@ -4,21 +4,24 @@ import cv2
 SIFT_EXTRACTOR = cv2.SIFT_create()
 
 NUMBER_OF_AGENTS = 25
-COMMUNICATION_RING_RANGE = 1
 
 ORIGINAL_IMAGES_DIR = "data/original_images"
-SUBIMAGES_DIR = "data/subimages"
 CODEBOOKS_DIR = "codebooks"
-CONTINUOUS_RESULTS_DIR = "results/continuous_est"
-TRAINED_CENTROIDS_PATH = f"{CODEBOOKS_DIR}/trained_centroids.npy"
-DEFAULT_VLAD_VECTORS_PATH = f"{CODEBOOKS_DIR}/vlad_vectors.npy"
-SUBIMAGE_GRID_SIZE = (20, 20)
+FCM_CENTERS_PATH = f"{CODEBOOKS_DIR}/fcm_centers.npz"
 
-# Temperature of the softmax that converts cosine similarities into personal evidence. Set with --softmax_tau.
-SOFTMAX_TAU = 0.02
+# Number of fuzzy c-means clusters.
+NUMBER_OF_CLUSTERS = 64
+# Fuzzifier used to train the fuzzy c-means centers. Changing it requires retraining (prepare_image_dataset.py --train).
+TRAINING_FUZZIFIER = 1.1
+# Fuzzifier used to calculate memberships of map features and of features detected by agents. Changing it only requires recalculating the
+# memberships (prepare_image_dataset.py --membership_m).
+MEMBERSHIP_FUZZIFIER = 1.1
 
-# Add uncertainty and rival scores to the per-cycle decision dynamics export. Set with --log_signals.
-LOG_DECISION_SIGNALS = False
+# Repeatability filter of map features. The whole map is degraded NUMBER_OF_DEGRADED_COPIES times like an agent's photo, and a map feature is
+# kept in the codebook only if it is found again in at least MIN_REPEAT_COUNT of the copies. MIN_REPEAT_COUNT = 0 keeps all features.
+NUMBER_OF_DEGRADED_COPIES = 6
+MIN_REPEAT_COUNT = 5
+
 TERRAIN_IMAGE_NAMES = {
     "city": "city_bw.png",
     "desert": "desert_bw.png",
@@ -29,8 +32,3 @@ TERRAIN_NAMES = tuple(TERRAIN_IMAGE_NAMES.keys())
 
 # Height 100 m, 82 deg diagonal FOV, 4:3 aspect ratio.
 AGENT_SIZE = np.array([79, 63])
-
-# A decision score is the mass of non-Theta focal sets containing a tile, so it never exceeds 1.
-DS_DECISION_THRESHOLD = 1.0
-DS_THRESHOLD_MIN = 0.15
-DS_THRESHOLD_MAX = 1.0
