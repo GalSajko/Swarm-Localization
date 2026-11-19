@@ -140,7 +140,7 @@ def parse_optional_float_argument(raw_extra_args, prefix, default_value = None, 
     return parsed_value
 
 def build_results_paths(experiment_name):
-    """Build output CSV paths using the experiment-family directories from experiments_readme.md."""
+    """Build output CSV paths using the experiment-family directories from docs/vlad_experiments_readme.md."""
     experiment_stem = os.path.splitext(os.path.basename(experiment_name))[0]
     personal_fusion_named_sets = {
         "personal_fusion_rules_sweep",
