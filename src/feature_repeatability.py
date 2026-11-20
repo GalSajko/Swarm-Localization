@@ -2,7 +2,7 @@
 
 The whole map is degraded several times with the same operations that are applied to an agent's photo. A map feature is repeatable if SIFT finds a
 keypoint at the same place, with a similar size and orientation, in most of the degraded copies. Such features are the ones an agent is likely to
-detect, so only they are kept in the codebook.
+detect, so the codebook keeps the most repeatable feature of every agent-view window (prepare_image_dataset.select_window_features).
 """
 
 import numpy as np

@@ -164,8 +164,6 @@ cython_debug/
 
 *.csv
 .DS_Store
-run_continuous_est_batch.sh
-run_decision_threshold_sweep.sh
 
 /data/
 /results/
@@ -178,5 +176,4 @@ run_decision_threshold_sweep.sh
 !results/.gitkeep
 !codebooks/.gitkeep
 
-experiments_readme.md
 /docs/

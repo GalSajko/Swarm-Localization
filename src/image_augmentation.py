@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
 
-# Ranges of the randomized camera degradation. The repeatability filter of the map (feature_repeatability.py) covers the same ranges.
+# Ranges of the randomized camera degradation. The repeatability of map features (feature_repeatability.py) covers the same ranges.
 ZOOM_FACTOR_RANGE = (1.01, 1.08)
 RESOLUTION_FACTOR_RANGE = (0.70, 0.85)
 NOISE_SIGMA_RANGE = (4.0, 10.0)
@@ -28,23 +28,6 @@ def pixelate_image(original_image, new_size):
     resized_image = cv2.resize(temp_resized_image, (width, height), interpolation = cv2.INTER_LINEAR)
 
     return resized_image
-
-def add_gaussian_noise(original_image):
-    """Add Gaussian image noise with a fixed default sigma.
-
-    Args:
-        original_image (numpy.ndarray): Input image.
-
-    Returns:
-        numpy.ndarray: Noisy image.
-    """
-    original_image = original_image.astype(np.float32)
-    mean = 0.0
-    sigma = 10.0
-    gaussian_noise = np.random.normal(mean, sigma, original_image.shape).astype(np.float32)
-    noisy_image = np.clip(original_image + gaussian_noise, 0, 255).astype(np.uint8)
-
-    return noisy_image
 
 def zoom_in_image(original_image, zoom_factor = 1.1):
     """Crop around the center and resize back to simulate digital zoom.
@@ -76,7 +59,6 @@ def zoom_in_image(original_image, zoom_factor = 1.1):
 
 def augment_drone_capture(
     original_image,
-    randomize = False,
     zoom_factor = 1.05,
     resolution_factor = 0.8,
     noise_sigma = 8.0,
@@ -85,7 +67,6 @@ def augment_drone_capture(
 
     Args:
         original_image (numpy.ndarray): Input image.
-        randomize (bool, optional): Randomize augmentation strengths. Defaults to False.
         zoom_factor (float, optional): Digital zoom multiplier. Defaults to 1.05.
         resolution_factor (float, optional): Downscale factor before upsampling. Defaults to 0.8.
         noise_sigma (float, optional): Gaussian noise sigma. Defaults to 8.0.
@@ -93,11 +74,6 @@ def augment_drone_capture(
     Returns:
         numpy.ndarray: Augmented image.
     """
-    if randomize:
-        zoom_factor = np.random.uniform(*ZOOM_FACTOR_RANGE)
-        resolution_factor = np.random.uniform(*RESOLUTION_FACTOR_RANGE)
-        noise_sigma = np.random.uniform(*NOISE_SIGMA_RANGE)
-
     height, width = original_image.shape[:2]
     degraded_width = max(1, int(round(width * resolution_factor)))
     degraded_height = max(1, int(round(height * resolution_factor)))

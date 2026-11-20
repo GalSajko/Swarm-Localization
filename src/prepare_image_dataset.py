@@ -7,9 +7,10 @@ are missing or if --train is given.
 3. Count in how many degraded copies of the terrain image every map feature is found again and save the counts in
 'codebooks/map_repeatability_<terrain>.npz'. This runs only if the counts are missing, if they do not belong to the saved features, or if
 --extract or --repeatability is given.
-4. Keep the repeatable map features, calculate their fuzzy memberships and save them with the feature locations and the centers in
-'codebooks/fcm_codebook_<terrain>.npz'. This step is fast and always runs, so the membership fuzzifier (--membership_m) and the required number of
-copies (--min_repeat_count) can be changed without repeating steps 1 to 3.
+4. Select the codebook features with a sliding window of the agent's view size (the most repeatable feature of every window), calculate their
+fuzzy memberships and save them with the feature locations, descriptors and the centers in 'codebooks/fcm_codebook_<terrain>.npz'. This step is
+fast and always runs, so the membership fuzzifier (--membership_m) and the window step (--window_steps) can be changed without repeating steps 1
+to 3.
 """
 
 import argparse
@@ -217,18 +218,58 @@ def calculate_and_save_repeat_counts(terrain_name, image, map_features):
 
     return repeat_counts
 
+def select_window_features(keypoints_xy, scores, map_shape, window_steps):
+    """Select the best feature of every window of the agent's view size that slides over the map.
+
+    The map is divided into cells of 1/window_steps of the window size. Every window covers window_steps x window_steps cells and starts at a cell
+    corner, so the best feature of a window is the best of its cells' best features.
+
+    Args:
+        keypoints_xy (numpy.ndarray): Feature locations (N, 2) in pixels.
+        scores (numpy.ndarray): Feature scores (N,), higher is better.
+        map_shape (Sequence[int]): Map height and width.
+        window_steps (int): Number of steps per window size.
+
+    Returns:
+        tuple[numpy.ndarray, float]: Sorted indices of the features that win at least one window, and the share of windows without any feature.
+    """
+    height, width = (int(value) for value in map_shape)
+    cell_width, cell_height = constants.AGENT_SIZE / window_steps
+    cells_x, cells_y = int(np.ceil(width / cell_width)), int(np.ceil(height / cell_height))
+    cell_x = np.minimum((keypoints_xy[:, 0] // cell_width).astype(int), cells_x - 1)
+    cell_y = np.minimum((keypoints_xy[:, 1] // cell_height).astype(int), cells_y - 1)
+    cell = cell_y * cells_x + cell_x
+
+    # Best feature of every cell.
+    order = np.lexsort((-scores, cell))
+    is_cell_best = np.r_[True, cell[order][1:] != cell[order][:-1]]
+    cell_best_feature = np.full(cells_x * cells_y, -1)
+    cell_best_feature[cell[order][is_cell_best]] = order[is_cell_best]
+    cell_best_score = np.full(cells_x * cells_y, -np.inf)
+    cell_best_score[cell[order][is_cell_best]] = scores[order][is_cell_best]
+
+    # Best cell of every window.
+    windows = np.lib.stride_tricks.sliding_window_view(cell_best_score.reshape(cells_y, cells_x), (window_steps, window_steps))
+    windows = windows.reshape(cells_y - window_steps + 1, cells_x - window_steps + 1, window_steps * window_steps)
+    best_cell_in_window = windows.argmax(axis = 2)
+    has_feature = np.isfinite(windows.max(axis = 2))
+    window_y, window_x = np.mgrid[0:windows.shape[0], 0:windows.shape[1]]
+    best_cell = (window_y + best_cell_in_window // window_steps) * cells_x + window_x + best_cell_in_window % window_steps
+
+    return np.unique(cell_best_feature[best_cell[has_feature]]), 1.0 - has_feature.mean()
+
 def prepare_terrain_codebooks(
     retrain = False,
     reextract = False,
     recalculate_repeatability = False,
     training_fuzzifier = None,
     membership_fuzzifier = None,
-    min_repeat_count = None,
+    window_steps = None,
 ):
     """Prepare terrain-specific fuzzy codebooks.
 
     Centers are trained first if they are missing or if retrain is True. Map features are calculated if they are missing or if reextract is True.
-    Repeat counts are calculated if they are missing, if the map features were recalculated or if recalculate_repeatability is True. The feature
+    Repeat counts are calculated if they are missing, if the map features were recalculated or if recalculate_repeatability is True. The window
     selection and the memberships are always recalculated from the saved centers, map features and repeat counts.
 
     Args:
@@ -237,14 +278,13 @@ def prepare_terrain_codebooks(
         recalculate_repeatability (bool, optional): Recalculate the repeat counts of map features. Defaults to False.
         training_fuzzifier (float, optional): Fuzzifier for training the centers. Defaults to constants.TRAINING_FUZZIFIER.
         membership_fuzzifier (float, optional): Fuzzifier for the memberships of map features. Defaults to constants.MEMBERSHIP_FUZZIFIER.
-        min_repeat_count (int, optional): Number of degraded copies in which a map feature must be found again to be kept. Defaults to
-            constants.MIN_REPEAT_COUNT.
+        window_steps (int, optional): The selection window moves by 1/window_steps of its size. Defaults to constants.WINDOW_STEPS.
     """
     training_fuzzifier = constants.TRAINING_FUZZIFIER if training_fuzzifier is None else training_fuzzifier
     membership_fuzzifier = constants.MEMBERSHIP_FUZZIFIER if membership_fuzzifier is None else membership_fuzzifier
-    min_repeat_count = constants.MIN_REPEAT_COUNT if min_repeat_count is None else min_repeat_count
-    if not 0 <= min_repeat_count <= constants.NUMBER_OF_DEGRADED_COPIES:
-        raise ValueError(f"Minimal repeat count must be between 0 and {constants.NUMBER_OF_DEGRADED_COPIES}.")
+    window_steps = constants.WINDOW_STEPS if window_steps is None else window_steps
+    if window_steps < 1:
+        raise ValueError("Window steps must be at least 1.")
 
     if retrain or not os.path.exists(constants.FCM_CENTERS_PATH):
         centers, training_fuzzifier = train_and_save_centers(training_fuzzifier)
@@ -271,27 +311,30 @@ def prepare_terrain_codebooks(
             repeat_counts = calculate_and_save_repeat_counts(terrain_name, image, map_features)
         del image
 
-        is_kept = repeat_counts >= min_repeat_count
-        memberships = fuzzy_clustering.calculate_memberships(map_features["descriptors"][is_kept], centers, membership_fuzzifier)
+        # SIFT response is below 1, so the score ranks by repeat count first and by response second.
+        scores = repeat_counts + map_features["keypoints_meta"][:, 2].astype(np.float64)
+        kept, empty_window_share = select_window_features(map_features["keypoints_xy"], scores, map_features["map_shape"], window_steps)
+        memberships = fuzzy_clustering.calculate_memberships(map_features["descriptors"][kept], centers, membership_fuzzifier)
         np.savez(
             get_terrain_codebook_path(terrain_name),
-            keypoints_xy = map_features["keypoints_xy"][is_kept],
+            keypoints_xy = map_features["keypoints_xy"][kept],
+            descriptors = map_features["descriptors"][kept],
             memberships = memberships,
-            repeat_counts = repeat_counts[is_kept],
+            repeat_counts = repeat_counts[kept],
             centers = centers,
             membership_fuzzifier = membership_fuzzifier,
             training_fuzzifier = training_fuzzifier,
-            min_repeat_count = min_repeat_count,
+            window_steps = window_steps,
             number_of_degraded_copies = constants.NUMBER_OF_DEGRADED_COPIES,
             map_shape = map_features["map_shape"],
         )
 
         cluster_shares = memberships.sum(axis = 0, dtype = np.float64) / len(memberships)
         print(
-            f"Prepared terrain '{terrain_name}': kept {len(memberships)} of {len(repeat_counts)} features ({100 * is_kept.mean():.1f}%) found in at "
-            f"least {min_repeat_count} of {constants.NUMBER_OF_DEGRADED_COPIES} degraded copies, median top membership "
-            f"{np.median(memberships.max(axis = 1)):.3f}, cluster shares between {100 * cluster_shares.min():.2f}% and "
-            f"{100 * cluster_shares.max():.2f}%."
+            f"Prepared terrain '{terrain_name}': kept {len(kept)} of {len(repeat_counts)} features ({100 * len(kept) / len(repeat_counts):.1f}%), "
+            f"{100 * empty_window_share:.1f}% of windows without a feature, kept features found in {np.median(repeat_counts[kept]):.0f} of "
+            f"{constants.NUMBER_OF_DEGRADED_COPIES} degraded copies (median), median top membership {np.median(memberships.max(axis = 1)):.3f}, "
+            f"cluster shares between {100 * cluster_shares.min():.2f}% and {100 * cluster_shares.max():.2f}%."
         )
 #endregion
 
@@ -302,7 +345,7 @@ if __name__ == '__main__':
     parser.add_argument("--repeatability", action = "store_true", help = "Recalculate the repeatability of map features even if it already exists.")
     parser.add_argument("--training_m", type = float, default = None, help = f"Fuzzifier for training the centers (default {constants.TRAINING_FUZZIFIER}). Only used when the centers are trained.")
     parser.add_argument("--membership_m", type = float, default = None, help = f"Fuzzifier for the memberships of map features (default {constants.MEMBERSHIP_FUZZIFIER}).")
-    parser.add_argument("--min_repeat_count", type = int, default = None, help = f"Number of degraded copies (of {constants.NUMBER_OF_DEGRADED_COPIES}) in which a map feature must be found again to be kept (default {constants.MIN_REPEAT_COUNT}, 0 keeps all features).")
+    parser.add_argument("--window_steps", type = int, default = None, help = f"The selection window of the agent's view size moves by 1/window_steps of its size (default {constants.WINDOW_STEPS}).")
     arguments = parser.parse_args()
     prepare_terrain_codebooks(
         arguments.train,
@@ -310,5 +353,5 @@ if __name__ == '__main__':
         arguments.repeatability,
         arguments.training_m,
         arguments.membership_m,
-        arguments.min_repeat_count,
+        arguments.window_steps,
     )
