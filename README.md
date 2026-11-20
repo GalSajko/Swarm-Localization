@@ -7,7 +7,7 @@ Collective localization of an aerial swarm by image retrieval, without GPS. A sw
 This branch (`fcm-patterns`) replaces tile classification with fuzzy feature pattern matching. The map is no longer cut into tiles and described with VLAD vectors. Instead, the swarm matches the pattern of features that its agents detect against the features of the whole map.
 
 1. **Map codebook (offline, implemented).** RootSIFT features are calculated on each whole terrain image (city, desert, mountains, rural) and saved with their pixel locations. A shared set of 64 fuzzy c-means centers is trained on the SpaceNet training images. A window of the agent's view size slides over the map, and only the most repeatable feature of every window is kept (repeatable features are found again when the map is degraded like an agent's photo). This leaves about 3 features per agent view on every terrain. Each kept feature gets a membership in each of the 64 clusters. See [Prepare the codebooks](#prepare-the-codebooks).
-2. **Pattern matching (online, implemented as a simulation).** Each agent sweeps its own search cell and stops when the strongest feature in its photo passes a stop rule. It flies until that feature is under the center of its view, and takes the map position of the map feature its descriptor matched as its own position, without odometry. The agents then vote with the fuzzy memberships of their features (calculated with the same centers and fuzzifier, `fuzzy_clustering.calculate_memberships`) and their measured relative positions, which confirms correct agents and corrects wrong ones. Agents are assumed to be aligned with the map (no rotation). See [Run the online simulation](#run-the-online-simulation).
+2. **Pattern matching (online, implemented as a simulation).** Each agent sweeps its own search cell and stops when the strongest feature in its photo passes a stop rule. It flies until that feature is under the center of its view, and takes the map position of the map feature its descriptor matched as its own position, without odometry. The agents then vote with the fuzzy memberships of their features (calculated with the same centers and fuzzifier, `fuzzy_clustering.calculate_memberships`) and their measured relative positions, which confirms correct agents and corrects wrong ones. Agents are assumed to be aligned with the map up to a small heading error (at most 5 degrees) in their photos. See [Run the online simulation](#run-the-online-simulation).
 
 The previous approach (VLAD tile classification with Dempster-Shafer fusion) and its simulator live on the `main` branch.
 
@@ -71,9 +71,9 @@ The script has four steps. The first three are slow and only run when their outp
 
 #### Repeatability
 
-An agent's photo is degraded (zoom, resolution loss, noise; `image_augmentation.augment_drone_capture`), and most map features are not detected again in such a photo. Step 3 therefore measures how well every map feature survives this degradation.
+An agent's photo differs from the map (see [Agent photos](#agent-photos)), and most map features are not detected again in it. Step 3 therefore measures how well every map feature survives a mild version of this degradation (zoom, resolution loss, noise).
 
-1. The whole terrain image is degraded `constants.NUMBER_OF_DEGRADED_COPIES` (6) times with the same three operations (`image_augmentation.degrade_whole_image`). The strengths are spread evenly over the ranges used for agents' photos (zoom 1.01 to 1.08, resolution 70% to 85%, noise sigma 4 to 10), in a different combination for every copy.
+1. The whole terrain image is degraded `constants.NUMBER_OF_DEGRADED_COPIES` (6) times with the same three operations (`image_augmentation.degrade_whole_image`). The strengths are spread evenly over the ranges (zoom 1.01 to 1.08, resolution 70% to 85%, noise sigma 4 to 10), in a different combination for every copy.
 2. SIFT runs on every copy, and the keypoints are converted back to the pixels of the original image.
 3. A map feature is found in a copy if the copy has a keypoint within 2.5 pixels, with a size within a factor of 1.3 and an orientation within 20 degrees (`feature_repeatability.py`).
 4. The repeat count of a feature is the number of copies in which it is found (0 to 6).
@@ -116,8 +116,8 @@ Defaults: experiment `default`, all four terrains, 25 agents, 100 trials per ter
 ### What a trial simulates
 
 1. **Search area.** A near-square grid of cells, one per agent, is centered on a random drop point inside the map. A cell is half a tile of a 20x20 tile grid (about 410 x 290 m). This is the grid search of the `main` branch.
-2. **Search.** Every agent sweeps its cell in lawnmower lanes 0.8 view sizes apart, at 17 m/s, and takes a photo every 0.5 s (`search_agent.py`). The photo is degraded like a drone capture (zoom, resolution loss, noise). In every photo the agent takes its strongest feature (highest SIFT response) and stops when it passes the stop rule:
-   - `response`: the response is above `constants.RESPONSE_THRESHOLD` (0.0633, the 90th percentile of the strongest response in random photos, pooled over the four terrains).
+2. **Search.** Every agent sweeps its cell in lawnmower lanes 0.8 view sizes apart, at 17 m/s, and takes a photo every 0.5 s (`search_agent.py`). The photo differs from the map like a drone photo from a satellite image (see [Agent photos](#agent-photos)). In every photo the agent takes its strongest feature (highest SIFT response) and stops when it passes the stop rule:
+   - `response`: the response is above `constants.RESPONSE_THRESHOLD` (0.0633, the 90th percentile of the strongest response in random photos, pooled over the four terrains, measured with the earlier mild photo degradation; the current photos pass it more often).
    - `lowe`: the Lowe ratio of its RootSIFT descriptor against the codebook descriptors (distance to the nearest divided by the distance to the second nearest) is below `constants.LOWE_RATIO_THRESHOLD` (0.7).
 
    An agent that does not stop within 400 s uses its best photo (highest response, or lowest Lowe ratio).
@@ -125,6 +125,25 @@ Defaults: experiment `default`, all four terrains, 25 agents, 100 trials per ter
 4. **Pattern vote** (`pattern_voting.py`). Every agent calculates the memberships of its feature. Its candidates are the map features whose fuzzy overlap `sum_k min(u_k, v_k)` with these memberships exceeds 0.5. Each candidate votes for the position of a reference agent, using the agents' relative positions, which are measured directly between the agents (exact in the simulation). Votes of different agents agree within 5 px (10 m). A place is scored by the sum over agents of each agent's best overlap there, and the best place is the answer. Every agent's final estimate is the answer shifted by its relative position.
 
 The simulation knows the true positions only to take photos and to emulate flying. Agents never use them.
+
+### Agent photos
+
+A drone photo differs from the satellite map in geometry, light and sensor. `image_augmentation.degrade_drone_photo` simulates this for every photo, with random strengths in the ranges of the `PHOTO_*` constants:
+
+| difference | range |
+|---|---|
+| scale (altitude error, different ground resolution) | 0.85 to 1.20 |
+| heading error | up to 5 degrees |
+| camera tilt (perspective) | every corner moves by up to 3% of the view size |
+| view center shift | up to 1 px |
+| gamma, contrast, brightness | 0.7 to 1.4, 0.75 to 1.3, up to 20 gray levels |
+| illumination gradient across the view (sun angle, vignetting, cloud shadow) | up to 15% |
+| blur (defocus, motion) | sigma 0.4 to 1.2 |
+| resolution | 50% to 80% |
+| noise | sigma 5 to 14 |
+| JPEG compression | quality 40 to 80 |
+
+The geometric part is one homography, which also gives the true map position of every keypoint in the photo (used only by the simulation). Seasonal changes, shadows at another time of day, changed buildings and parallax of tall objects cannot be simulated by filtering the map image, so real image pairs remain the decisive test.
 
 ### Results
 

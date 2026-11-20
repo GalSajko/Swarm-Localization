@@ -4,18 +4,20 @@ Positions are map pixel coordinates (x, y). An agent never uses them to localize
 feature it matched (see SearchAgent.recenter). The simulation uses true positions only to take photos and to emulate flying.
 """
 
+import cv2
 import numpy as np
 
 import constants
 import utils
-from image_augmentation import NOISE_SIGMA_RANGE, RESOLUTION_FACTOR_RANGE, ZOOM_FACTOR_RANGE, augment_drone_capture
+from image_augmentation import degrade_drone_photo
 
 VIEW_WIDTH, VIEW_HEIGHT = (int(value) for value in constants.AGENT_SIZE)
 
 def take_photo(image, center):
     """Take a degraded photo centered at a map position and detect its features.
 
-    The view is kept inside the image. The photo is degraded like a drone capture with random zoom, resolution loss and noise.
+    The view is kept inside the image. The photo has the random differences between the satellite map and a drone camera
+    (image_augmentation.degrade_drone_photo).
 
     Args:
         image (numpy.ndarray): Grayscale terrain image.
@@ -28,13 +30,7 @@ def take_photo(image, center):
     """
     x0 = int(np.clip(round(center[0] - VIEW_WIDTH / 2), 0, image.shape[1] - VIEW_WIDTH))
     y0 = int(np.clip(round(center[1] - VIEW_HEIGHT / 2), 0, image.shape[0] - VIEW_HEIGHT))
-    zoom_factor = np.random.uniform(*ZOOM_FACTOR_RANGE)
-    photo = augment_drone_capture(
-        image[y0 : y0 + VIEW_HEIGHT, x0 : x0 + VIEW_WIDTH],
-        zoom_factor = zoom_factor,
-        resolution_factor = np.random.uniform(*RESOLUTION_FACTOR_RANGE),
-        noise_sigma = np.random.uniform(*NOISE_SIGMA_RANGE),
-    )
+    photo, photo_to_map = degrade_drone_photo(image, x0, y0, (VIEW_WIDTH, VIEW_HEIGHT))
     keypoints, descriptors = constants.SIFT_EXTRACTOR.detectAndCompute(photo, None)
     view_center = np.array([x0 + VIEW_WIDTH / 2, y0 + VIEW_HEIGHT / 2])
 
@@ -48,8 +44,8 @@ def take_photo(image, center):
         }
 
     pixel_xy = np.array([keypoint.pt for keypoint in keypoints], dtype = np.float64)
-    # The digital zoom stretches the photo around its center, so a keypoint lies (pixel offset / zoom) from the view center on the map.
-    map_xy = view_center + (pixel_xy - np.array([VIEW_WIDTH / 2, VIEW_HEIGHT / 2])) / zoom_factor
+    # OpenCV keypoints have pixel centers at integer positions, the homography at integer + 0.5.
+    map_xy = cv2.perspectiveTransform((pixel_xy + 0.5)[None], photo_to_map)[0] - 0.5
     return {
         "view_center": view_center,
         "pixel_xy": pixel_xy,
